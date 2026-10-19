@@ -2,13 +2,13 @@
 
 English · [Русский](README.ru.md)
 
-A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io/) that turns the AI tools running on your Windows PC into little office workers. Open Claude Code, Codex, ChatGPT or the Claude desktop app, and a bot walks in from the street, sits at a desk and starts typing. Close the program, and it walks out.
+A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io/) that turns the AI tools running on your Windows PC into little office workers. Open Claude Code, Codex, ChatGPT or the Claude desktop app, and a bot arrives by taxi, sits at a desk and starts typing. Close the program, and it walks out to the curb and catches a taxi home.
 
 ![Autumn night](docs/screenshots/autumn-night.png)
 
 | | |
 |---|---|
-| ![Summer day with rain](docs/screenshots/summer-day.png) | ![Winter night with snow](docs/screenshots/winter-night.png) |
+| ![Summer day](docs/screenshots/summer-day.png) | ![Winter night with snow](docs/screenshots/winter-night.png) |
 | ![Winter day](docs/screenshots/winter-day.png) | ![Spring evening](docs/screenshots/spring-dusk.png) |
 
 ## What happens in the office
@@ -25,11 +25,15 @@ A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io
 - **Idle for 40 seconds:** it goes to relax on the sofa, the bean bags, the arcade machine or in the kitchen.
 - **Coffee breaks:** every few minutes a working bot walks to the coffee machine or the water cooler.
 - **Speech bubbles** in Ukrainian ("Привіт!", "Правлю файл", "Кава!"), never more than two at once.
-- **Desk lamps** switch on when a bot sits down and off when it leaves. At night the room gets darker and the lamps glow.
-- **Seasons and weather:** spring petals, summer rain with puddles, autumn leaves and wind, winter snow with a Christmas tree and a snowman. Auto mode picks the season by month.
+- **Taxi:** new bots arrive by taxi and get out one by one; a leaving bot waits at the curb with its phone, and the taxi picks it up. Other cars queue behind a stopped taxi.
+- **Desk lamps** switch on when a bot sits down and off when it leaves. At night the room stays warmly lit and the lamps glow.
+- **Seasons:** spring blossom and flowers, summer greenery, autumn leaves, winter snow with a Christmas tree and a snowman. Auto mode picks the season by month.
+- **Weather** changes by itself every 6 to 15 minutes, with odds that fit the season: clear, rain (puddles, ripples, wet road reflecting the lamps and the neon sign), thunderstorm with lightning, snow, fog drifting over the street, strong wind with flying leaves. Bots comment on it.
+- **Night:** street lamps, fairy lights on the hedge, fireflies over the grass on warm nights, car headlights.
 - **Wind behind the building:** light streaks pass behind the office, and the backlight, neon sign and street lamps flicker with the gusts.
-- **Time** of day and the wall clock follow Kyiv time.
-- **Panel** in the top right lists every agent and what it is doing. Its last line is the season button: click it to cycle Auto → Spring → Summer → Autumn → Winter.
+- **Day and night** follow the real sunrise and sunset in Kyiv for today's date, so winter evenings get dark earlier. The wall clock shows Kyiv time.
+- **Panel** in the top right lists every agent and what it is doing, and today's sunrise and sunset. At the bottom are two buttons: season (Auto → Spring → Summer → Autumn → Winter) and weather (Auto → Clear → Rain → Storm → Snow → Fog → Wind).
+- **Detail:** the scene is drawn at 768×432 and scaled up without smoothing, so it stays crisp pixel art at any screen size.
 
 ## Requirements
 
@@ -53,9 +57,9 @@ Test without any AI running: with the server on, run `node test-agent.mjs TEST` 
 
 ## Settings
 
-- **Season:** the button in the panel, or the *Season* property in Wallpaper Engine's wallpaper settings.
-- **Hide the panel:** open `index.html#nohud` (the season button stays).
-- **Preview with fake agents:** `index.html#demo`. Add `-winter`, `-summer`, `-night` and so on to force a look, for example `index.html#demo-winter-night`.
+- **Season and weather:** the buttons in the panel, or the *Season* and *Weather* properties in Wallpaper Engine's wallpaper settings.
+- **Hide the panel:** open `index.html#nohud` (the two buttons stay).
+- **Preview with fake agents:** `index.html#demo`. Add `-winter`, `-night`, `-storm`, `-fog` and so on to force a look, for example `index.html#demo-summer-night-storm`. `-leave` makes one fake agent leave after 15 seconds to show the taxi.
 
 ## Privacy
 

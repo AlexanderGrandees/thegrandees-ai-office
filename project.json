@@ -11,11 +11,62 @@
         "type": "combo",
         "value": "auto",
         "options": [
-          { "label": "Авто (по месяцу)", "value": "auto" },
-          { "label": "Весна", "value": "spring" },
-          { "label": "Літо", "value": "summer" },
-          { "label": "Осінь", "value": "autumn" },
-          { "label": "Зима", "value": "winter" }
+          {
+            "label": "Авто (по месяцу)",
+            "value": "auto"
+          },
+          {
+            "label": "Весна",
+            "value": "spring"
+          },
+          {
+            "label": "Літо",
+            "value": "summer"
+          },
+          {
+            "label": "Осінь",
+            "value": "autumn"
+          },
+          {
+            "label": "Зима",
+            "value": "winter"
+          }
+        ]
+      },
+      "weather": {
+        "order": 1,
+        "text": "Погода",
+        "type": "combo",
+        "value": "auto",
+        "options": [
+          {
+            "label": "Авто (змінюється сама)",
+            "value": "auto"
+          },
+          {
+            "label": "Ясно",
+            "value": "clear"
+          },
+          {
+            "label": "Дощ",
+            "value": "rain"
+          },
+          {
+            "label": "Гроза",
+            "value": "storm"
+          },
+          {
+            "label": "Сніг",
+            "value": "snow"
+          },
+          {
+            "label": "Туман",
+            "value": "fog"
+          },
+          {
+            "label": "Вітер",
+            "value": "wind"
+          }
         ]
       }
     }

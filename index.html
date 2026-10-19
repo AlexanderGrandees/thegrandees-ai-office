@@ -16,35 +16,49 @@
 <canvas id="c"></canvas>
 <script>
 'use strict';
-// Пиксельный AI-офис, вид сверху. Сцена рисуется в буфер 384x216 и растягивается целым множителем без сглаживания.
+// Пиксельный AI-офис, вид сверху. Логика сцены считается в клетках 384x216, а рисуется в буфер вдвое точнее (768x432),
+// поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
-// Поверх сцены: погода по сезону, ветер за зданием, лампы на столах, перерывы на кофе, реплики, панель агентов.
-const W = 384, H = 216, SERVER = 'http://127.0.0.1:7777';
+// Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
+const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
 const DEMO = HASH.includes('demo');                  // только для проверки: ненастоящие агенты
-const FAST = HASH.includes('fast');                  // только для проверки: частые перерывы и реплики
+const FAST = HASH.includes('fast');                  // только для проверки: частые перерывы, реплики и смена погоды
 
-const scr = document.createElement('canvas'); scr.width = W; scr.height = H;
-const g = scr.getContext('2d');
-const bgc = document.createElement('canvas'); bgc.width = W; bgc.height = H;
-const b = bgc.getContext('2d');
+function layer() {
+  const c = document.createElement('canvas'); c.width = W * S; c.height = H * S;
+  const x = c.getContext('2d'); x.setTransform(S, 0, 0, S, 0, 0); x.imageSmoothingEnabled = false;
+  return [c, x];
+}
+const [scr, g] = layer();                            // кадр
+const [bgc, b] = layer();                            // неподвижный фон
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
 
-let cur = g;                                         // куда рисуют R и P: в фон, в кадр или в спрайт
+let cur = g;                                         // куда рисуют R и Q: в фон, в кадр или в спрайт
+// R и P рисуют в клетках сцены, Q и q в мелких пикселях (полклетки, координаты удвоены)
 const R = (x, y, w, h, c) => { cur.fillStyle = c; cur.fillRect(Math.round(x), Math.round(y), w, h); };
 const P = (x, y, c) => R(x, y, 1, 1, c);
-function disc(cx, cy, r, c, sy = 1) { for (let y = -r; y <= r; y++) for (let x = -r; x <= r; x++) if (x * x + y * y <= r * r + r * 0.6) P(cx + x, cy + Math.round(y * sy), c); }
-function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-function shade(hex, k) {
-  const n = parseInt(hex.slice(1), 16);
-  return '#' + [n >> 16, n >> 8 & 255, n & 255].map(v => Math.max(0, Math.min(255, Math.round(v * k))).toString(16).padStart(2, '0')).join('');
+const Q = (x, y, w, h, c) => { cur.fillStyle = c; cur.fillRect(Math.round(x) / S, Math.round(y) / S, Math.round(w) / S, Math.round(h) / S); };
+const q = (x, y, c) => Q(x, y, 1, 1, c);
+function discQ(cx, cy, r, c, sy = 1) {
+  r = Math.round(r);
+  for (let y = -r; y <= r; y++) { const hw = Math.floor(Math.sqrt(r * r + r * 0.6 - y * y)); Q(cx - hw, cy + Math.round(y * sy), hw * 2 + 1, 1, c); }
 }
+function lineQ(x0, y0, x1, y1, c) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) || 1;
+  for (let i = 0; i <= n; i++) q(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, c);
+}
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const hexRgb = hex => { const n = parseInt(hex.slice(1), 16); return [n >> 16, n >> 8 & 255, n & 255]; };
+const toHex = a => '#' + a.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+const shade = (hex, k) => toHex(hexRgb(hex).map(v => v * k));
+const mix = (h1, h2, k) => { const a = hexRgb(h1), c = hexRgb(h2); return toHex(a.map((v, i) => v + (c[i] - v) * k)); };
 const pick = arr => arr[Math.random() * arr.length | 0];
 const rand = (a, b2) => a + Math.random() * (b2 - a);
 
-// ---------- пиксельный шрифт 3x5 (латиница для табличек) ----------
+// ---------- пиксельный шрифт 3x5 (латиница для вывески и табличек) ----------
 const FONT = {
   A:'010101111101101',B:'110101110101110',C:'011100100100011',D:'110101101101110',E:'111100110100111',F:'111100110100100',
   G:'011100101101011',H:'101101111101101',I:'111010010010111',J:'001001001101010',K:'101101110101101',L:'100100100100111',
@@ -55,24 +69,20 @@ const FONT = {
   '8':'111101111101111','9':'111101111001110','-':'000000111000000','.':'000000000000010','!':'010010010000010',
   '?':'110001010000010',':':'000010000010000','#':'101111101111101',' ':'000000000000000'
 };
-const textW = s => s.length * 4 - 1;
-function text(s, x, y, col) {
-  s = String(s).toUpperCase(); cur.fillStyle = col;
+const textW = s => s.length * 4 - 1;                 // ширина в клетках шрифта
+// текст в мелких пикселях: px = размер клетки шрифта, hi = светлая верхняя кромка у каждой клетки (как у неоновой трубки)
+function textQ(s, x, y, px, col, hi) {
+  s = String(s).toUpperCase();
   for (let i = 0; i < s.length; i++) {
     const f = FONT[s[i]] || FONT['-'];
-    for (let p = 0; p < 15; p++) if (f[p] === '1') cur.fillRect(Math.round(x) + i * 4 + p % 3, Math.round(y) + (p / 3 | 0), 1, 1);
+    for (let p = 0; p < 15; p++) if (f[p] === '1') {
+      const gx = x + (i * 4 + p % 3) * px, gy = y + (p / 3 | 0) * px;
+      Q(gx, gy, px, px, col); if (hi) Q(gx, gy, px, 1, hi);
+    }
   }
 }
-function tag(s, x, y, col) {
-  for (const [dx, dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[1,1],[1,-1],[-1,1]]) text(s, x + dx, y + dy, '#120f24');
-  text(s, x, y, col);
-}
-function line(x0, y0, x1, y1, col) {
-  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) || 1;
-  for (let i = 0; i <= n; i++) P(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, col);
-}
 
-// ---------- время: всегда киевское ----------
+// ---------- время: всегда киевское, день и ночь по настоящему восходу и закату ----------
 const KFMT = (() => {
   for (const timeZone of ['Europe/Kyiv', 'Europe/Kiev']) {
     try { return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit', month: 'numeric', hourCycle: 'h23' }); } catch {}
@@ -85,20 +95,36 @@ function kyiv() {
   const o = {}; for (const p of KFMT.formatToParts(d)) o[p.type] = +p.value;
   return { h: o.hour % 24, m: o.minute, s: o.second, mon: o.month };
 }
+const utcMin = (d = new Date()) => d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60;
+// восход и закат в Киеве на сегодня (формулы NOAA), в минутах от полуночи UTC
+function sunTimes(d = new Date()) {
+  const lat = 50.45 * Math.PI / 180, lon = 30.52;
+  const N = Math.round((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - Date.UTC(d.getUTCFullYear(), 0, 0)) / 864e5);
+  const gm = 2 * Math.PI / 365 * (N - 1);
+  const eqt = 229.18 * (0.000075 + 0.001868 * Math.cos(gm) - 0.032077 * Math.sin(gm) - 0.014615 * Math.cos(2 * gm) - 0.040849 * Math.sin(2 * gm));
+  const decl = 0.006918 - 0.399912 * Math.cos(gm) + 0.070257 * Math.sin(gm) - 0.006758 * Math.cos(2 * gm) + 0.000907 * Math.sin(2 * gm) - 0.002697 * Math.cos(3 * gm) + 0.00148 * Math.sin(3 * gm);
+  const ha = Math.acos(Math.cos(90.833 * Math.PI / 180) / (Math.cos(lat) * Math.cos(decl)) - Math.tan(lat) * Math.tan(decl)) * 180 / Math.PI;
+  return { rise: 720 - 4 * (lon + ha) - eqt, set: 720 - 4 * (lon - ha) - eqt };
+}
+// минуты UTC в киевское «ЧЧ:ММ»
+function kyivHM(m) {
+  const k = kyiv(), off = Math.round((((k.h * 60 + k.m) - Math.floor(utcMin())) % 1440 + 1440) % 1440 / 30) * 30;
+  const v = Math.round(m + off + 1440) % 1440;
+  return `${String(v / 60 | 0).padStart(2, '0')}:${String(v % 60).padStart(2, '0')}`;
+}
+// сумерки: от 40 минут до восхода до 30 после, и от 30 минут до заката до 40 после
 function phaseNow() {
   const forced = HASH.match(/night|dusk|day/);
   if (forced) return forced[0];
-  const k = kyiv(), h = k.h + k.m / 60;
-  if (h < 5.5 || h >= 21) return 'night';
-  if (h < 7.5 || h >= 18.5) return 'dusk';
-  return 'day';
+  const { rise, set } = sunTimes(), m = utcMin();
+  if ((m >= rise - 40 && m < rise + 30) || (m >= set - 30 && m < set + 40)) return 'dusk';
+  return m >= rise + 30 && m < set - 30 ? 'day' : 'night';
 }
 let phase = phaseNow();
 
 // ---------- сезон: авто по месяцу или выбранный кнопкой ----------
 const SEASONS = ['auto', 'spring', 'summer', 'autumn', 'winter'];
 const SEASON_UA = { auto: 'Авто', spring: 'Весна', summer: 'Літо', autumn: 'Осінь', winter: 'Зима' };
-const WEATHER_UA = { spring: 'пелюстки', summer: 'дощ', autumn: 'вітер, листя', winter: 'сніг' };
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -117,33 +143,69 @@ function setSeason(v) {
   seasonPick = v; store.set('office-season', v);
   refreshScene();
 }
-// Свойство «Сезон» в настройках Wallpaper Engine. При запуске WE присылает сохранённое значение: его не применяем повторно,
-// чтобы выбор кнопкой не сбрасывался.
+
+// ---------- погода: в режиме «Авто» меняется сама каждые 6–15 минут, с учётом сезона ----------
+const WEATHERS = ['auto', 'clear', 'rain', 'storm', 'snow', 'fog', 'wind'];
+const WEATHER_UA = { auto: 'Авто', clear: 'Ясно', rain: 'Дощ', storm: 'Гроза', snow: 'Сніг', fog: 'Туман', wind: 'Вітер' };
+const WEATHER_MIX = {                                // как часто бывает каждая погода в сезоне
+  winter: { snow: 5, clear: 2.5, fog: 1.5, wind: 1 },
+  spring: { clear: 4, rain: 3, wind: 2, fog: 1 },
+  summer: { clear: 4.5, rain: 3, storm: 1.5, wind: 1 },
+  autumn: { wind: 3.5, rain: 3, fog: 2, clear: 1.5 },
+};
+let weatherPick = WEATHERS.includes(store.get('office-weather')) ? store.get('office-weather') : 'auto';
+let autoW = (() => { try { return JSON.parse(store.get('office-weather-auto')); } catch { return null; } })();
+function weatherNow() {
+  const forced = HASH.match(/(?:#|-)(clear|rain|storm|snow|fog|wind)(?=-|$)/);
+  if (forced) return forced[1];
+  if (weatherPick !== 'auto') return weatherPick;
+  const mix = WEATHER_MIX[season];
+  if (!autoW || autoW.season !== season || Date.now() > autoW.until || !mix[autoW.kind]) {
+    let r = Math.random() * Object.values(mix).reduce((s, v) => s + v, 0), kind = 'clear';
+    for (const [k, v] of Object.entries(mix)) if ((r -= v) < 0) { kind = k; break; }
+    autoW = { kind, season, until: Date.now() + (FAST ? rand(25, 40) : rand(6, 15) * 60) * 1000 };
+    store.set('office-weather-auto', JSON.stringify(autoW));
+  }
+  return autoW.kind;
+}
+let weather = weatherNow(), weatherSince = 0;
+const isWet = () => weather === 'rain' || weather === 'storm';
+const isGrey = () => weather !== 'clear' && weather !== 'wind';
+function setWeather(v) {
+  if (!WEATHERS.includes(v)) return;
+  weatherPick = v; store.set('office-weather', v);
+  refreshScene();
+}
+
+// Свойства «Сезон» и «Погода» в настройках Wallpaper Engine. При запуске WE присылает сохранённые значения:
+// их не применяем повторно, чтобы выбор кнопкой не сбрасывался.
 window.wallpaperPropertyListener = {
   applyUserProperties(p) {
-    if (!p.season) return;
-    const v = p.season.value;
-    if (store.get('office-season-prop') === v) return;
-    store.set('office-season-prop', v);
-    setSeason(v);
+    for (const [key, set] of [['season', setSeason], ['weather', setWeather]]) {
+      if (!p[key]) continue;
+      const v = p[key].value, mem = `office-${key}-prop`;
+      if (store.get(mem) === v) continue;
+      store.set(mem, v);
+      set(v);
+    }
   },
 };
 
 const SKY = { night: ['#0d0b24', '#1a1540', '#2b205a'], dusk: ['#4c2b70', '#cf6566', '#f0a05a'], day: ['#5b9de3', '#8cc2f0', '#c4e2f6'] };
 const SKY_GREY = { night: ['#0e0d1c', '#17162b', '#22203a'], dusk: ['#3b3150', '#6c5a72', '#8d7a86'], day: ['#7f8ea8', '#9eabc0', '#bcc6d6'] };
-const SHADOW_BASE = { night: 'rgba(6,8,34,0.55)', dusk: 'rgba(60,20,70,0.25)', day: null };
+const SHADOW_BASE = { night: 'rgba(6,8,34,0.46)', dusk: 'rgba(60,20,70,0.25)', day: null };
 const SHADOW_SNOW = { night: 'rgba(14,24,78,0.5)', dusk: 'rgba(60,40,110,0.25)', day: null };
 const SHADOW = new Proxy({}, { get: (_, k) => (season === 'winter' ? SHADOW_SNOW : SHADOW_BASE)[k] });
-const ROOM_DIM = { night: 'rgba(14,10,44,0.38)', dusk: 'rgba(30,14,50,0.16)', day: null };   // ночью в комнате темнее, лампы видно
+const ROOM_DIM = { night: 'rgba(16,10,44,0.2)', dusk: 'rgba(30,14,50,0.1)', day: null };    // ночью в комнате чуть темнее, но верхний свет горит
+const ROOM_WARM = { night: 0.07, dusk: 0.04, day: 0 };
 const LOOK = {
-  spring: { grass: '#5a9a55', dots: ['#66a85f', '#4e8c4a', '#72b468', '#477f44'], flowers: ['#ff9ab8', '#ffffff', '#ffd35c', '#ffc2d6', '#ff9ab8'], nflow: 150, leaf: ['#2f6e3d', '#3d8a4c', '#58a865'], bloom: ['#ffb3cf', '#ffd6e6'] },
-  summer: { grass: '#4a8446', dots: ['#55934f', '#3f743d', '#5c9c57', '#3a6b3b'], flowers: ['#ffd35c', '#ff9ab8', '#ffffff', '#b9a8ff'], nflow: 60, leaf: ['#2a6337', '#357d44', '#4f9c5c'] },
-  autumn: { grass: '#7b8646', dots: ['#8a934f', '#6c763c', '#9c8644', '#8f6c38'], flowers: ['#e0745f', '#ffb347', '#ffd35c', '#c4553b', '#d9702f'], nflow: 220, leaf: ['#9c3f2b', '#d06a2c', '#eeb03a'] },
+  spring: { grass: '#5a9a55', dots: ['#66a85f', '#4e8c4a', '#72b468', '#477f44'], flowers: ['#ff9ab8', '#ffffff', '#ffd35c', '#ffc2d6', '#ff9ab8'], nflow: 220, leaf: ['#2f6e3d', '#3d8a4c', '#58a865'], bloom: ['#ffb3cf', '#ffd6e6'] },
+  summer: { grass: '#4a8446', dots: ['#55934f', '#3f743d', '#5c9c57', '#3a6b3b'], flowers: ['#ffd35c', '#ff9ab8', '#ffffff', '#b9a8ff'], nflow: 110, leaf: ['#2a6337', '#357d44', '#4f9c5c'] },
+  autumn: { grass: '#7b8646', dots: ['#8a934f', '#6c763c', '#9c8644', '#8f6c38'], flowers: ['#e0745f', '#ffb347', '#ffd35c', '#c4553b', '#d9702f'], nflow: 0, leaf: ['#9c3f2b', '#d06a2c', '#eeb03a'] },
   winter: { grass: '#e3e9f5', dots: ['#d3dcee', '#f3f6fc', '#c6d1e8', '#ffffff'], flowers: [], nflow: 0, leaf: null },
 };
-const wetSeason = () => season === 'summer';
 
-// ---------- геометрия ----------
+// ---------- геометрия (в клетках сцены) ----------
 // Здание x 72..312, y 20..164. Стена с окнами 24..44, пол 44..158, дверь внизу x 184..200.
 // Слева чилл-зона (x 76..150), коридор x 154, рабочие столы (x 158..266), справа кухня (x 270..308).
 const V = 154;
@@ -168,221 +230,353 @@ const CHILL = [
   { lane: 142, entry: [{ x: 236, y: 142 }], face: 'down', sit: false, act: 'phone' },
 ].map(s => ({ ...s, owner: null }));
 const BREAK_SPOTS = [CHILL[5], CHILL[9]];             // кофемашина и кулер с кипятком
-function streetPlace() {
-  const ex = Math.random() < 0.5 ? -10 : W + 10;
-  return { lane: 142, entry: [{ x: 192, y: 142 }, { x: 192, y: 152 }, { x: 192, y: 166 }, { x: 192, y: 176 }, { x: ex, y: 176 }], street: true };
-}
+// место у бордюра, где агент выходит из такси или ждёт его
+const curbPlace = () => ({ lane: 142, entry: [{ x: 192, y: 142 }, { x: 192, y: 152 }, { x: 192, y: 166 }, { x: 192, y: 179 }], face: 'down', street: true });
 const spotOf = p => p.entry[p.entry.length - 1];
 const WINDOWS = [198, 230];
-const inWindow = (x, y) => y >= 27 && y < 41 && WINDOWS.some(wx => x >= wx + 1 && x < wx + 25);
-const inBuilding = (x, y) => x >= 72 && x < 312 && y >= 20 && y < 164;
-const inSign = (x, y) => x >= 148 && x < 236 && y >= 3 && y < 19;
+const inWindow = (x, y) => y >= 26.5 && y < 41.5 && WINDOWS.some(wx => x >= wx + 0.5 && x < wx + 25.5);
+const inBuilding = (x, y) => x >= 71 && x < 313 && y >= 19 && y < 165;
+const inSign = (x, y) => x >= 145 && x < 239 && y >= 0 && y < 20;
 const LAMPS = [40, 140, 250, 344];
 const TREES = [[26, 26, 12], [54, 58, 9], [22, 104, 13], [50, 140, 8], [356, 28, 12], [334, 72, 9], [362, 118, 12], [336, 150, 8], [104, 8, 6], [280, 8, 7]];
 const PUDDLES = [[30, 177, 6], [118, 179, 4], [302, 175, 7], [88, 196, 9], [214, 206, 10], [334, 192, 7], [262, 178, 4]];
+const SPOTS = [336, 368, 400, 432];                  // точечные лампы под вывеской (мелкие пиксели)
+const FAIRY = [];                                    // гирлянда на живой изгороди
+for (const [x0, x1] of [[154, 362], [406, 614]]) for (let x = x0 + 4; x < x1; x += 11) FAIRY.push([x, 327 + (x % 3)]);
+
+// ---------- мебель и растения в мелких пикселях ----------
+function boxQ(x, y, w, h, c, edge = shade(c, 0.42)) { Q(x - 1, y - 1, w + 2, h + 2, edge); Q(x, y, w, h, c); Q(x, y, w, 1, shade(c, 1.16)); }
+function bigPlantQ(cx, by, h, r, pot = '#eeeaf6') {
+  Q(cx - 7, by - 12, 15, 12, shade(pot, 0.45)); Q(cx - 6, by - 11, 13, 10, pot); Q(cx + 3, by - 10, 2, 8, shade(pot, 0.88));
+  Q(cx - 7, by - 14, 15, 3, shade(pot, 0.7)); Q(cx - 6, by - 14, 13, 1, shade(pot, 1.06)); Q(cx - 5, by - 13, 11, 1, '#4a3424');
+  const n = 9;
+  for (let k = 0; k < n; k++) {
+    const a = -Math.PI / 2 + (k - (n - 1) / 2) * 0.3 + (r() - 0.5) * 0.2, L = h * (0.6 + r() * 0.4);
+    for (let i = 2; i <= L; i++) {
+      const fall = (i / L) ** 2 * Math.abs(Math.cos(a)) * h * 0.3;
+      const x = cx + Math.cos(a) * i, y = by - 14 + Math.sin(a) * i + fall;
+      const w = Math.max(0, Math.round(Math.sin(Math.PI * i / L) * 2.2));
+      Q(x - w / 2, y - w / 2, w + 1, w + 1, i > L * 0.6 ? '#4fb060' : '#2f8a4a');
+      if (w > 1) q(x, y - 1, '#7fd88a');
+    }
+  }
+}
+function potQ(cx, by, pot = '#eeeaf6', bloom) {
+  Q(cx - 4, by - 6, 9, 6, shade(pot, 0.5)); Q(cx - 3, by - 6, 7, 5, pot); Q(cx - 4, by - 7, 9, 2, shade(pot, 1.08));
+  discQ(cx - 2, by - 10, 3, '#2a7a40'); discQ(cx + 2, by - 10, 3, '#2f8a4a'); discQ(cx, by - 12, 3, '#3f9f58');
+  q(cx - 1, by - 14, '#7fd88a'); q(cx + 2, by - 12, '#58b86a'); q(cx - 3, by - 10, '#58b86a');
+  if (bloom) { q(cx - 2, by - 12, bloom); q(cx + 2, by - 13, bloom); q(cx + 1, by - 9, bloom); }
+}
+function vineQ(x, y0, len, r) {
+  for (let i = 0; i < len; i++) {
+    const x1 = x + Math.round(Math.sin(i * 0.45 + x) * 2);
+    q(x1, y0 + i, '#2f7a45');
+    if (i % 3 === 1) Q(x1 + (i % 6 === 1 ? 1 : -2), y0 + i, 2, 2, r() < 0.5 ? '#58b86a' : '#3f9f58');
+  }
+}
+function planterQ(x, y, w, r) {
+  Q(x - 1, y + 5, w + 2, 10, '#3a2416'); Q(x, y + 6, w, 8, '#9a6a44'); Q(x, y + 6, w, 1, '#c09068'); Q(x, y + 10, w, 1, '#7a5236');
+  for (let i = 0; i < w - 2; i += 4) discQ(x + 2 + i, y + 4, 3, i % 8 ? '#2f7a45' : '#357d44');
+  for (let i = 1; i < w - 1; i += 3) { const c = season === 'autumn' ? '#ffb347' : season === 'winter' ? '#f4f7fd' : (i % 2 ? '#ff9ab8' : '#ffd6e6'); q(x + i, y + 1 + (i * 7 % 4), c); }
+}
+function planks(x0, x1, y0, y1, base, seam, r) {
+  for (let y = y0, row = 0; y < y1; y += 8, row++) {
+    const h = Math.min(8, y1 - y);
+    let x = x0 - (row * 37) % 60;
+    while (x < x1) {
+      const len = 46 + (r() * 40 | 0), xs = Math.max(x, x0), xe = Math.min(x + len, x1), k = 0.94 + r() * 0.1, c = shade(base, k);
+      Q(xs, y, xe - xs, h, c); Q(xs, y, xe - xs, 1, shade(base, k * 1.07));
+      if (h === 8) Q(xs, y + 7, xe - xs, 1, seam);
+      if (x + len < x1) Q(x + len - 1, y, 1, h, seam);
+      for (let i = 0; i < len / 16; i++) { const gx = xs + r() * Math.max(1, xe - xs - 7); Q(gx, y + 2 + (r() * 4 | 0), 3 + (r() * 5 | 0), 1, shade(c, 0.9)); }
+      x += len;
+    }
+  }
+}
 
 // ---------- фон ----------
-// Мебель рисуется «три четверти»: верх, передняя грань, тёмный контур и светлая кромка, как у картинок GPT.
-function shell(x, y, w, h, c) { R(x - 1, y - 1, w + 2, h + 2, shade(c, 0.42)); R(x, y, w, h, c); R(x, y, w, 1, shade(c, 1.18)); }
-function furn(x, y, w, top, front, c) {
-  R(x - 1, y - 1, w + 2, top + front + 2, shade(c, 0.4));
-  R(x, y, w, top, c); R(x, y, w, 1, shade(c, 1.2));
-  R(x, y + top, w, front, shade(c, 0.72)); R(x, y + top, w, 1, shade(c, 0.58));
-}
-function bigPlant(cx, by, h, r, pot = '#eeeaf6') {
-  R(cx - 3, by - 5, 7, 6, shade(pot, 0.45)); R(cx - 2, by - 5, 5, 5, pot); R(cx - 2, by - 5, 5, 1, shade(pot, 0.82)); R(cx + 1, by - 4, 1, 3, shade(pot, 0.88));
-  for (let k = 0; k < 8; k++) {
-    const a = -Math.PI / 2 + (k - 3.5) * 0.36 + (r() - 0.5) * 0.25, L = h * (0.55 + r() * 0.45);
-    for (let i = 1; i <= L; i++) { const x = cx + Math.cos(a) * i, y = by - 5 + Math.sin(a) * i * 0.85; P(x, y, i > L * 0.55 ? '#5cbf6c' : '#2f8a4a'); if (i > 1 && i < L - 1) P(x + (k < 4 ? -1 : 1), y, '#3f9f58'); }
-  }
-}
-function vine(x, y0, len, r) {
-  for (let i = 0; i < len; i++) { const x1 = x + Math.round(Math.sin(i * 0.7 + x) * 1.2); P(x1, y0 + i, '#2f7a45'); if (i % 2 === 0) P(x1 + (i % 4 ? 1 : -1), y0 + i, r() < 0.5 ? '#58b86a' : '#3f9f58'); }
-}
 function renderBg() {
   cur = b;
-  const r = rng(11), L = LOOK[season], winter = season === 'winter';
-  // трава или снег, кочки и камешки
-  R(0, 0, W, H, L.grass);
-  for (let i = 0; i < 1400; i++) P(r() * W, r() * 168, L.dots[r() * 4 | 0]);
-  if (!winter) for (let i = 0; i < 90; i++) { const x = r() * W, y = r() * 160; if (x > 66 && x < 318 && y > 14) continue; P(x, y, shade(L.grass, 0.78)); P(x - 1, y - 1, shade(L.grass, 0.85)); P(x + 1, y - 1, shade(L.grass, 0.85)); }
-  for (let i = 0; i < 14; i++) { const x = r() * W, y = r() * 160; if (x > 62 && x < 322 && y > 10) continue; R(x, y, 3, 2, winter ? '#c3cfe6' : '#8d8a9e'); P(x, y, winter ? '#ffffff' : '#a9a6b8'); }
-  for (let i = 0; i < L.nflow; i++) {
-    const x = r() * W, y = r() * 162; if (x > 66 && x < 318 && y > 14) continue;
-    const c = L.flowers[r() * L.flowers.length | 0];
-    P(x, y, c); if (season === 'autumn' && r() < 0.5) P(x + 1, y, shade(c, 0.8));
+  const r = rng(11), L = LOOK[season], winter = season === 'winter', autumn = season === 'autumn', wet = isWet();
+  const out = (x, y) => !(x > 128 && x < 640 && y > 24);   // мелкие координаты: вне здания с запасом
+  // трава или снег: кочки, пучки, камешки, цветы или листья
+  Q(0, 0, W * S, H * S, L.grass);
+  for (let i = 0; i < 9000; i++) q(r() * 768, r() * 336, L.dots[r() * 4 | 0]);
+  if (!winter) for (let i = 0; i < 420; i++) {
+    const x = r() * 768 | 0, y = r() * 330 | 0; if (!out(x, y)) continue;
+    const c1 = shade(L.grass, 0.78), c2 = shade(L.grass, 1.2);
+    q(x - 2, y - 1, c1); q(x - 1, y, c1); q(x, y - 2, c1); q(x, y - 1, c1); q(x + 1, y, c1); q(x + 2, y - 1, c1); q(x, y - 3, c2); q(x + 2, y - 2, c2);
   }
-  if (winter) for (let i = 0; i < 60; i++) { const x = r() * W, y = r() * 160; if (x > 66 && x < 318 && y > 14) continue; R(x, y, 3, 1, '#c3cfe6'); }
-  // тротуар крупной плиткой, бордюр, дорога
-  R(0, 168, W, 14, '#a8a4b8'); for (let x = 0; x < W; x += 12) R(x, 168, 1, 14, '#8f8ba2'); R(0, 175, W, 1, '#948fa6');
-  for (let x = 0; x < W; x += 12) { R(x + 1, 168, 11, 1, '#b8b4c8'); R(x + 1, 176, 11, 1, '#b8b4c8'); }
-  R(0, 182, W, 2, '#c9c5d6'); R(0, 184, W, 32, wetSeason() ? '#2c2a42' : '#36344c'); R(0, 184, W, 1, '#24223a');
-  for (let x = 4; x < W; x += 20) R(x, 199, 10, 1, '#d8d4e6');
-  for (let i = 0; i < 120; i++) P(r() * W, 185 + r() * 30, wetSeason() ? '#35334d' : '#3d3b55');
-  if (wetSeason()) for (const [x, y, s] of PUDDLES) { disc(x, y, s, 'rgba(70,90,140,0.45)', 0.35); R(x - s + 2, y - 1, Math.max(1, s - 2), 1, 'rgba(200,220,255,0.35)'); }
+  for (let i = 0; i < 26; i++) {
+    const x = r() * 760 | 0, y = r() * 326 | 0; if (!out(x, y)) continue;
+    const c = winter ? '#c3cfe6' : '#8d8a9e';
+    Q(x + 1, y + 4, 6, 1, 'rgba(0,0,0,0.18)'); Q(x, y, 7, 4, shade(c, 0.8)); Q(x + 1, y, 5, 3, c); Q(x + 1, y, 3, 1, winter ? '#ffffff' : '#b4b1c4');
+  }
+  if (autumn) for (let i = 0; i < 520; i++) {
+    const x = r() * 768 | 0, y = r() * 334 | 0; if (!out(x, y)) continue;
+    const c = L.flowers[r() * L.flowers.length | 0]; Q(x, y, 2, 1, c); q(x + (r() < 0.5 ? 0 : 1), y + 1, shade(c, 0.75));
+  }
+  for (let i = 0; i < L.nflow; i++) {
+    const x = r() * 768 | 0, y = r() * 330 | 0; if (!out(x, y)) continue;
+    const c = L.flowers[r() * L.flowers.length | 0];
+    q(x, y + 2, '#2f6e3d'); q(x, y - 1, c); q(x - 1, y, c); q(x + 1, y, c); q(x, y + 1, c); q(x, y, c === '#ffd35c' ? '#ff8a3c' : '#ffd35c');
+  }
+  if (winter) for (let i = 0; i < 140; i++) { const x = r() * 768 | 0, y = r() * 330 | 0; if (!out(x, y)) continue; Q(x, y, 5 + (r() * 6 | 0), 1, '#c3cfe6'); q(x + 2, y - 1, '#ffffff'); }
+
+  // тротуар из плитки, бордюр, дорога
+  Q(0, 336, 768, 28, '#8f8ba2');
+  for (let row = 0; row < 2; row++) for (let x = -12 * row; x < 768; x += 24) {
+    const y = 336 + row * 14, c = shade('#b2aec2', 0.97 + r() * 0.06);
+    Q(x + 1, y + 1, 22, 12, c); Q(x + 1, y + 1, 22, 1, '#c8c4d6'); Q(x + 1, y + 1, 1, 12, '#c0bcd0'); Q(x + 1, y + 12, 22, 1, '#9b97ad');
+    if (r() < 0.25) { const cx = x + 4 + r() * 14 | 0; q(cx, y + 5, '#9b97ad'); q(cx + 1, y + 6, '#9b97ad'); q(cx + 2, y + 6, '#9b97ad'); }
+  }
+  if (wet) Q(0, 336, 768, 28, 'rgba(40,40,90,0.14)');
+  Q(0, 364, 768, 4, '#cfcbdc'); Q(0, 364, 768, 1, '#e6e2f0'); Q(0, 367, 768, 1, '#7d798f');
+  const asphalt = wet ? '#28263c' : '#34324a';
+  Q(0, 368, 768, 64, asphalt); Q(0, 368, 768, 2, '#1e1c30');
+  for (let i = 0; i < 2600; i++) q(r() * 768, 370 + r() * 62, r() < 0.5 ? shade(asphalt, 1.18) : shade(asphalt, 0.85));
+  for (let x = 8; x < 768; x += 40) { Q(x, 397, 20, 2, wet ? '#c4c0d6' : '#d8d4e6'); Q(x, 399, 20, 1, 'rgba(0,0,0,0.15)'); }
+  if (wet) for (const [x, y, s] of PUDDLES) { discQ(x * 2, y * 2, s * 2, 'rgba(70,90,140,0.45)', 0.35); Q(x * 2 - s * 2 + 4, y * 2 - 2, s * 2, 1, 'rgba(200,220,255,0.35)'); }
   if (winter) {
-    for (let x = 0; x < W; x++) { const h = 2 + Math.round(1.5 + Math.sin(x * 0.7) + Math.sin(x * 0.23) * 1.5); R(x, 168, 1, h, '#eef3fb'); R(x, 182 - (x % 7 === 0 ? 1 : 0), 1, 2, '#e3e9f5'); }
-    for (let x = 0; x < W; x += 3) if (r() < 0.6) R(x, 184 + (r() < 0.5 ? 0 : 30), 2 + (r() * 3 | 0), 1, '#5a5874');
+    for (let x = 0; x < 768; x++) {
+      const h = 4 + Math.round(3 + 2 * Math.sin(x * 0.35) + 3 * Math.sin(x * 0.115));
+      Q(x, 336, 1, h, '#eef3fb'); if (h > 8) q(x, 336 + h - 1, '#d3dcee');
+      Q(x, 362 - (x % 14 === 0 ? 2 : 0), 1, 5, '#e3e9f5');
+    }
+    for (let x = 0; x < 768; x += 5) if (r() < 0.6) Q(x, 370 + (r() < 0.5 ? 0 : 58), 3 + (r() * 6 | 0), 1, '#5a5874');
   }
   // дорожка к двери
-  R(184, 164, 16, 4, '#b8ad98'); for (let x = 185; x < 200; x += 5) R(x, 165, 3, 2, '#cfc4ae');
-  // вывеска с цветами по краям
-  R(147, 2, 90, 18, '#120f24'); R(148, 3, 88, 16, '#1D1A33'); R(148, 3, 88, 1, '#4A37C9'); R(148, 18, 88, 1, '#4A37C9');
-  R(147, 3, 1, 16, '#ff5aa0'); R(236, 3, 1, 16, '#5cc8ff');
-  text('THEGRANDEES', 192 - textW('THEGRANDEES') / 2, 5, '#b9a8ff'); text('AI OFFICE', 192 - textW('AI OFFICE') / 2, 12, '#ffcf5c');
-  for (const px of [141, 243]) { R(px - 2, 14, 5, 4, '#cfc9df'); R(px - 2, 14, 5, 1, '#eeeaf6'); for (let k = 0; k < 7; k++) P(px - 3 + k, 13 - (k % 2) - (k === 3 ? 2 : 0), winter ? '#f4f7fd' : k % 2 ? '#58b86a' : '#2f8a4a'); }
-  if (winter) for (let x = 148; x < 236; x++) R(x, 2, 1, 1 + (Math.sin(x * 0.9) > 0.3 ? 1 : 0), '#f4f7fd');
-  // живая изгородь вдоль здания
-  for (const [x0, x1] of [[76, 182], [202, 308]]) {
-    R(x0, 164, x1 - x0, 4, season === 'autumn' ? '#5f6a2e' : '#2f6e3d'); R(x0, 167, x1 - x0, 1, '#22502c');
-    for (let x = x0; x < x1; x += 4) { disc(x + 2, 165, 2, season === 'autumn' ? '#6c7836' : '#357a44'); P(x + 1, 164, season === 'autumn' ? '#8d9a48' : '#4f9c5c'); }
-    if (winter) { for (let x = x0; x < x1; x++) R(x, 163, 1, 2 + (Math.sin(x) > 0.5 ? 1 : 0), '#f4f7fd'); continue; }
-    for (let x = x0 + 2; x < x1; x += 5) P(x, 165 + (x % 2), season === 'autumn' ? ['#d06a2c', '#eeb03a', '#9c3f2b'][(x / 5 | 0) % 3] : ['#ffd35c', '#ff9ab8', '#ffffff'][(x / 5 | 0) % 3]);
+  Q(368, 328, 32, 8, '#a89d88'); for (let k = 0; k < 3; k++) { Q(370 + k * 10, 329, 8, 6, '#cfc4ae'); Q(370 + k * 10, 334, 8, 1, '#b8ad98'); }
+
+  // вывеска: тёмный короб, неоновая рамка от розового к голубому, буквы-трубки
+  Q(290, 0, 188, 40, '#0b0918'); Q(293, 3, 182, 34, '#17142c');
+  for (let x = 295; x < 473; x++) { const c = mix('#ff5aa0', '#5cc8ff', (x - 295) / 178); q(x, 5, c); q(x, 34, c); }
+  Q(295, 5, 1, 30, '#ff5aa0'); Q(472, 5, 1, 30, '#5cc8ff');
+  textQ('THEGRANDEES', 384 - 43, 10, 2, '#b9a8ff', '#e6e0ff');
+  textQ('AI OFFICE', 384 - 35, 23, 2, '#ffcf5c', '#fff3c4');
+  potQ(282, 38, '#cfc9df', season === 'spring' ? '#ff9ab8' : null); potQ(486, 38, '#cfc9df', season === 'spring' ? '#ff9ab8' : null);
+  if (winter) { for (let x = 292; x < 476; x++) Q(x, 0, 1, 2 + (Math.sin(x * 0.45) > 0.3 ? 1 : 0), '#f4f7fd'); Q(276, 26, 13, 2, '#f4f7fd'); Q(480, 26, 13, 2, '#f4f7fd'); }
+
+  // скамейка, урна, скейт, столбы фонарей
+  Q(43, 311, 58, 5, '#4a3020'); Q(44, 312, 56, 3, '#a8764a'); Q(44, 312, 56, 1, '#c8955f');
+  for (let k = 0; k < 3; k++) { const y = 318 + k * 4; Q(43, y - 1, 58, 4, '#5a3a24'); Q(44, y, 56, 2, '#b07b4c'); Q(44, y, 56, 1, '#d29e66'); }
+  Q(48, 329, 3, 5, '#2d2a40'); Q(93, 329, 3, 5, '#2d2a40');
+  if (winter) { Q(44, 310, 56, 2, '#f4f7fd'); Q(44, 317, 56, 2, '#f4f7fd'); }
+  Q(113, 319, 11, 15, '#1b1830'); Q(114, 320, 9, 13, '#4a4560'); Q(114, 320, 9, 2, '#6b6585'); Q(116, 323, 1, 9, '#5a5574'); Q(120, 323, 1, 9, '#5a5574'); Q(113, 334, 12, 2, 'rgba(0,0,0,0.25)');
+  Q(470, 352, 26, 6, '#1D1A33'); Q(471, 353, 24, 4, '#4A37C9'); Q(473, 353, 9, 1, '#7d6ef0'); Q(474, 358, 3, 2, '#ffcf5c'); Q(489, 358, 3, 2, '#ffcf5c');
+  for (const lx of LAMPS) {
+    const X = lx * 2;
+    Q(X - 4, 345, 9, 4, '#141220'); Q(X - 3, 345, 7, 1, '#3a3552');
+    Q(X - 1, 316, 3, 30, '#1b1830'); Q(X - 1, 318, 1, 26, '#3a3552');
+    Q(X - 5, 303, 11, 2, '#141220'); q(X, 301, '#141220'); q(X, 302, '#141220');
+    Q(X - 4, 305, 9, 11, '#141220'); Q(X - 3, 306, 7, 9, '#5e5878'); Q(X - 3, 306, 7, 1, '#7a7496'); Q(X, 306, 1, 9, '#141220');
+    Q(X - 3, 316, 7, 1, '#141220');
+    if (winter) Q(X - 5, 302, 11, 1, '#f4f7fd');
   }
-  // скамейка, урна, велопарковка, столбы фонарей
-  furn(22, 158, 28, 5, 3, '#93663f'); for (let x = 25; x < 50; x += 5) R(x, 158, 1, 5, '#7a5236');
-  if (winter) R(22, 158, 28, 2, '#f4f7fd');
-  shell(57, 161, 4, 5, '#4a4560'); R(57, 161, 4, 1, '#6b6585');
-  R(232, 170, 22, 1, '#6b6585'); for (let x = 234; x < 254; x += 6) R(x, 170, 1, 4, '#6b6585');
-  R(236, 171, 12, 1, '#2d2a40'); disc(236, 173, 2, '#2d2a40'); disc(247, 173, 2, '#2d2a40'); P(241, 171, '#ff5c5c');
-  for (const lx of LAMPS) { disc(lx, 174, 1, '#1D1A33'); R(lx, 162, 1, 12, '#2d2a40'); R(lx - 2, 158, 5, 4, '#1D1A33'); R(lx - 1, 159, 3, 2, '#5e5878'); }
   // снеговик зимой
-  if (winter) { disc(64, 150, 4, '#ffffff'); disc(64, 144, 3, '#ffffff'); P(63, 143, '#1D1A33'); P(65, 143, '#1D1A33'); R(66, 144, 2, 1, '#ff8a3c'); R(61, 147, 7, 1, '#e0453c'); P(64, 149, '#1D1A33'); P(64, 151, '#1D1A33'); line(59, 147, 56, 145, '#6b4a33'); line(69, 147, 72, 145, '#6b4a33'); }
+  if (winter) {
+    discQ(128, 300, 8, '#d8e2f2'); discQ(127, 299, 7, '#ffffff'); discQ(128, 288, 6, '#d8e2f2'); discQ(127, 287, 5, '#ffffff');
+    Q(124, 279, 9, 2, '#1D1A33'); Q(125, 273, 7, 6, '#1D1A33'); Q(125, 277, 7, 1, '#e0453c');
+    Q(124, 285, 2, 2, '#1D1A33'); Q(129, 285, 2, 2, '#1D1A33'); Q(131, 288, 5, 2, '#ff8a3c');
+    Q(120, 293, 15, 3, '#e0453c'); Q(130, 296, 3, 5, '#c43030'); q(127, 299, '#1D1A33'); q(127, 303, '#1D1A33');
+    lineQ(119, 296, 111, 290, '#6b4a33'); lineQ(137, 296, 145, 290, '#6b4a33'); q(111, 289, '#6b4a33'); q(145, 289, '#6b4a33');
+  }
   // тень от времени суток на улице
   if (SHADOW[phase]) R(0, 0, W, H, SHADOW[phase]);
 
   // ---------- здание ----------
-  R(71, 19, 242, 146, '#120f24');
-  R(72, 20, 240, 4, '#2d2248'); R(72, 20, 240, 1, '#4a3a70');
-  R(72, 20, 4, 144, '#3b2d5c'); R(308, 20, 4, 144, '#3b2d5c'); R(75, 24, 1, 134, '#2d2248'); R(308, 24, 1, 134, '#2d2248');
-  R(72, 158, 112, 6, '#3b2d5c'); R(200, 158, 112, 6, '#3b2d5c'); R(72, 158, 112, 1, '#4a3a70'); R(200, 158, 112, 1, '#4a3a70');
-  if (winter) for (let x = 72; x < 312; x++) { R(x, 19, 1, 2 + (Math.sin(x * 0.5) > 0.6 ? 1 : 0), '#f4f7fd'); if (x % 11 === 3) R(x, 21, 1, 2, '#cfe4ff'); }
-  // стена: светлая, с плинтусом и бордюром сверху
-  R(76, 24, 232, 20, '#e2dcf4'); R(76, 24, 232, 1, '#f3f0fb'); R(76, 40, 232, 4, '#c9bfe8'); R(76, 40, 232, 1, '#ad9fd8'); R(76, 43, 232, 1, '#8f80c4');
-  // пол: чилл тёплое дерево, офис светлое дерево (меньше прожилок), кухня плитка
-  for (let y = 44; y < 158; y += 5) {
-    R(76, y, 78, 5, '#a77a52'); R(76, y + 4, 78, 1, '#916744');
-    for (let x = 76 + ((y / 5 | 0) % 3) * 13; x < 154; x += 38) R(x, y, 1, 4, '#916744');
-    R(154, y, 116, 5, '#d0a271'); R(154, y + 4, 116, 1, '#bb8d5e');
-    for (let x = 154 + ((y / 5 | 0) % 4) * 11; x < 270; x += 44) R(x, y, 1, 4, '#bb8d5e');
+  Q(142, 38, 484, 292, '#0e0b1c');
+  Q(144, 40, 480, 8, '#3b2d5c'); Q(144, 40, 480, 2, '#5a4888'); Q(144, 46, 480, 2, '#2a2046');
+  Q(144, 48, 8, 268, '#3b2d5c'); Q(616, 48, 8, 268, '#3b2d5c');
+  Q(144, 48, 2, 268, '#5a4888'); Q(616, 48, 2, 268, '#4a3a70'); Q(150, 48, 2, 268, '#2a2046'); Q(622, 48, 2, 268, '#2a2046');
+  for (const x of SPOTS) { Q(x - 3, 41, 7, 4, '#1b1830'); Q(x - 2, 44, 5, 2, '#141220'); Q(x - 1, 45, 3, 1, '#fff3c4'); }
+  if (winter) for (let x = 144; x < 624; x++) { Q(x, 37, 1, 3 + (Math.sin(x * 0.25) > 0.6 ? 2 : 0), '#f4f7fd'); if (x % 22 === 5) Q(x, 40, 1, 4 + x % 3, '#cfe4ff'); }
+  // стена: светлые панели, плинтус
+  Q(152, 48, 464, 40, '#e2dcf4'); Q(152, 48, 464, 2, '#f3f0fb');
+  for (let x = 184; x < 616; x += 32) Q(x, 50, 1, 28, '#d6cfee');
+  Q(152, 78, 464, 10, '#c9bfe8'); Q(152, 78, 464, 1, '#ad9fd8'); Q(152, 86, 464, 2, '#8f80c4');
+  // пол: чилл тёплое дерево, офис светлое, кухня плитка
+  planks(152, 306, 88, 316, '#a77a52', '#7d5638', r);
+  planks(308, 540, 88, 316, '#d0a271', '#a87c50', r);
+  for (let y = 88; y < 316; y += 16) for (let x = 542; x < 616; x += 16) {
+    const w = Math.min(16, 616 - x);
+    Q(x, y, w, 16, '#ebe7f4'); Q(x, y, w, 1, '#f8f6fd'); Q(x, y, 1, 16, '#f4f1fa'); Q(x, y + 15, w, 1, '#d4cde6'); Q(x + w - 1, y, 1, 16, '#d4cde6');
+    if ((x + y) % 48 === 0) { q(x + 4, y + 9, '#ffffff'); q(x + 5, y + 8, '#ffffff'); q(x + 6, y + 7, '#ffffff'); }
   }
-  for (let y = 44; y < 158; y += 8) for (let x = 270; x < 308; x += 8) { R(x, y, 8, 8, '#ebe7f4'); R(x, y + 7, 8, 1, '#d8d2ea'); R(x + 7, y, 1, 8, '#d8d2ea'); }
-  R(153, 44, 1, 114, '#7a5c40'); R(270, 44, 1, 114, '#a99dd4');
-  // нижняя стена поверх пола и проём двери
-  R(72, 158, 112, 6, '#3b2d5c'); R(200, 158, 112, 6, '#3b2d5c'); R(72, 158, 112, 1, '#4a3a70'); R(200, 158, 112, 1, '#4a3a70');
-  R(184, 158, 16, 6, '#d0a271'); R(184, 163, 16, 1, '#bb8d5e');
-  if (winter) { R(72, 158, 112, 2, '#f4f7fd'); R(200, 158, 112, 2, '#f4f7fd'); }
+  Q(306, 88, 2, 228, '#6b4c33'); Q(540, 88, 2, 228, '#a99dd4');
+  // нижняя стена поверх пола, проём двери и коврик
+  Q(144, 316, 224, 12, '#3b2d5c'); Q(400, 316, 224, 12, '#3b2d5c'); Q(144, 316, 224, 2, '#5a4888'); Q(400, 316, 224, 2, '#5a4888'); Q(144, 326, 224, 2, '#2a2046'); Q(400, 326, 224, 2, '#2a2046');
+  Q(368, 316, 32, 12, '#d0a271'); Q(368, 316, 32, 1, '#e0b685'); Q(368, 326, 32, 2, '#8a6a4a'); Q(368, 316, 1, 12, '#2a2046'); Q(399, 316, 1, 12, '#2a2046');
+  Q(369, 301, 30, 13, '#5e1a24'); Q(370, 302, 28, 11, '#b8333f'); for (let k = 0; k < 5; k++) Q(372, 303 + k * 2, 24, 1, '#d44a58');
+  if (winter) { Q(144, 314, 224, 3, '#f4f7fd'); Q(400, 314, 224, 3, '#f4f7fd'); }
   // мягкая тень у стен
-  for (let i = 0; i < 4; i++) { const a = (0.16 - i * 0.04).toFixed(2); R(76, 44 + i, 232, 1, `rgba(30,20,60,${a})`); R(76 + i, 44, 1, 114, `rgba(30,20,60,${a})`); R(307 - i, 44, 1, 114, `rgba(30,20,60,${a})`); }
+  for (let i = 0; i < 8; i++) { const a = (0.16 * (1 - i / 8)).toFixed(3); Q(152, 88 + i, 464, 1, `rgba(30,20,60,${a})`); Q(152 + i, 88, 1, 228, `rgba(30,20,60,${a})`); Q(615 - i, 88, 1, 228, `rgba(30,20,60,${a})`); }
   // солнце из окон днём
-  if (phase === 'day') for (const wx of WINDOWS) for (let y = 0; y < 22; y++) R(wx + 2 + y * 0.6, 45 + y, 22, 1, `rgba(255,248,215,${(0.16 * (1 - y / 22)).toFixed(3)})`);
+  if (phase === 'day' && !isGrey()) for (const wx of WINDOWS) for (let y = 0; y < 44; y++) Q(wx * 2 + 4 + y * 0.6, 90 + y, 46, 1, `rgba(255,248,215,${(0.16 * (1 - y / 44)).toFixed(3)})`);
   // ковёр со звёздами
-  R(79, 55, 72, 60, '#2a1f7a'); R(80, 56, 70, 58, '#5b48d6'); R(82, 58, 66, 54, '#3f2fb8');
-  for (let i = 0; i < 70; i++) P(83 + r() * 64, 59 + r() * 52, r() < 0.8 ? '#5b4ad0' : '#8f80ff');
-  R(82, 58, 66, 1, '#7d6ef0');
+  Q(158, 110, 144, 120, '#221866'); Q(160, 112, 140, 116, '#6a58e0'); Q(163, 115, 134, 110, '#221866'); Q(164, 116, 132, 108, '#3a2bb0');
+  for (let i = 0; i < 800; i++) q(165 + r() * 130, 117 + r() * 106, r() < 0.85 ? '#4232bf' : '#5b4ad0');
+  for (let x = 166; x < 296; x += 6) { q(x, 113, '#a99cff'); q(x, 226, '#a99cff'); }
+  for (let y = 118; y < 224; y += 6) { q(161, y, '#a99cff'); q(298, y, '#a99cff'); }
+  for (let i = 0; i < 26; i++) {
+    const x = 168 + r() * 124 | 0, y = 120 + r() * 100 | 0, c = r() < 0.3 ? '#ffe7a3' : '#b9a8ff';
+    q(x, y, c); q(x - 1, y, shade(c, 0.7)); q(x + 1, y, shade(c, 0.7)); q(x, y - 1, shade(c, 0.7)); q(x, y + 1, shade(c, 0.7));
+  }
   // книжный шкаф с лианой и котом-статуэткой
-  furn(78, 25, 18, 19, 2, '#7a5236'); R(79, 26, 16, 17, '#4f3624');
-  for (let s = 0; s < 3; s++) { R(79, 31 + s * 6, 16, 1, '#7a5236'); for (let k = 0; k < 7; k++) if (!(s === 1 && k > 4)) R(80 + k * 2, 26 + s * 6, 1, 5 - (k % 2), ['#e0745f', '#5cc8ff', '#ffd35c', '#7fe0b4', '#b9a8ff', '#ff9ab8', '#f7f5ff'][(k + s * 3) % 7]); }
-  R(90, 34, 3, 2, '#f7f5ff'); P(90, 33, '#f7f5ff'); P(92, 33, '#f7f5ff'); P(91, 35, '#ff9ab8');
-  vine(79, 24, 18, r); vine(95, 24, 12, r);
-  // телевизор на стене и тумба
-  shell(100, 27, 30, 15, '#14121f'); R(101, 28, 28, 12, '#1d2440'); R(102, 28, 26, 1, '#2c3760');
-  furn(98, 44, 34, 3, 4, '#7a5236'); R(114, 48, 1, 3, '#5b3d2a'); P(106, 49, '#c9a07a'); P(122, 49, '#c9a07a'); R(102, 44, 4, 2, '#2d2a40'); P(126, 45, '#7fe0b4');
-  // постер с фениксом
-  shell(136, 27, 14, 13, '#1D1A33'); R(137, 28, 12, 11, '#2a2150');
-  for (let i = 0; i < 5; i++) { P(142 - i, 31 + i, '#ff8a5c'); P(143 + i, 31 + i, '#ff8a5c'); P(142 - i, 32 + i, '#ffcf5c'); P(143 + i, 32 + i, '#ffcf5c'); }
-  R(142, 30, 2, 7, '#ff5c5c');
-  vine(153, 24, 16, r);
-  // доска задач
-  shell(158, 26, 34, 16, '#1D1A33'); R(159, 27, 32, 14, '#f7f5ff');
-  for (let c = 0; c < 3; c++) { R(160 + c * 10, 28, 9, 1, ['#b9a8ff', '#ffcf5c', '#7fe0b4'][c]); for (let k = 0; k < 3 - (c === 2 ? 0 : c); k++) R(161 + c * 10, 30 + k * 3, 6, 2, ['#ffcf5c', '#7fe0b4', '#ff9ab8', '#9cc8ff'][(c + k) % 4]); }
-  // окна с небом и городом
-  const sky = (wetSeason() || winter) && phase !== 'night' ? SKY_GREY[phase] : SKY[phase];
-  for (const wx of WINDOWS) {
-    R(wx - 1, 25, 28, 18, '#120f24'); R(wx, 26, 26, 16, '#1D1A33');
-    for (let y = 0; y < 14; y++) R(wx + 1, 27 + y, 24, 1, sky[Math.min(2, y / 5 | 0)]);
-    if (phase === 'night') for (let i = 0; i < 4; i++) P(wx + 2 + r() * 22, 28 + r() * 8, '#ffffff');
-    if (phase === 'day' && !wetSeason() && !winter) { R(wx + 4, 30, 8, 2, '#ffffff'); R(wx + 6, 29, 4, 1, '#ffffff'); }
-    if (phase === 'day' && (wetSeason() || winter)) { R(wx + 2, 29, 12, 2, '#d5dbe6'); R(wx + 14, 31, 9, 2, '#c9d0de'); }
-    for (let x = 0; x < 24; x++) {
-      const h = 3 + Math.round(4 * Math.abs(Math.sin((x + wx) / 4)));
-      R(wx + 1 + x, 41 - h, 1, h, phase === 'day' ? (x % 6 < 3 ? '#6f84b8' : '#8094c4') : '#221c45');
-      if (winter) P(wx + 1 + x, 41 - h, '#f4f7fd');
-      if (x % 3 === 1 && h > 3) P(wx + 1 + x, 41 - h + 2, phase === 'day' ? '#c4e2f6' : '#ffd98a');
+  Q(155, 49, 38, 44, '#3a2416'); Q(156, 50, 36, 42, '#8a5c3a'); Q(156, 50, 36, 2, '#a8764a'); Q(158, 53, 32, 37, '#4f3624');
+  const BOOKS = ['#e0745f', '#5cc8ff', '#ffd35c', '#7fe0b4', '#b9a8ff', '#ff9ab8', '#f7f5ff', '#4A37C9'];
+  for (let s = 0; s < 3; s++) {
+    const sy = 53 + s * 12;
+    Q(158, sy + 10, 32, 2, '#8a5c3a'); Q(158, sy + 10, 32, 1, '#a8764a');
+    let x = 159;
+    while (x < 189) {
+      if (s === 1 && x > 176) break;
+      const bw = 2 + (r() * 3 | 0), bh = 6 + (r() * 4 | 0), c = BOOKS[r() * BOOKS.length | 0];
+      if (x + bw > 189) break;
+      Q(x, sy + 10 - bh, bw, bh, c); Q(x, sy + 10 - bh, bw, 1, shade(c, 1.25)); Q(x, sy + 7 - (bh > 7 ? 2 : 0), bw, 1, shade(c, 0.7));
+      x += bw + (r() < 0.15 ? 1 : 0);
     }
-    R(wx + 12, 26, 2, 16, '#1D1A33'); R(wx - 1, 42, 28, 2, '#f3f0fb'); R(wx - 1, 43, 28, 1, '#c9bfe8');
-    for (const px of [wx + 3, wx + 21]) { R(px - 1, 40, 3, 2, '#b5643c'); P(px - 1, 39, '#3d8a4c'); P(px + 1, 39, '#58a865'); P(px, 38, season === 'spring' ? '#ff9ab8' : '#3d8a4c'); }
+  }
+  Q(179, 70, 7, 5, '#f7f5ff'); q(179, 69, '#f7f5ff'); q(185, 69, '#f7f5ff'); q(181, 71, '#1D1A33'); q(183, 71, '#1D1A33'); q(182, 72, '#ff9ab8'); Q(179, 74, 7, 1, '#d8d0f0'); Q(186, 72, 2, 1, '#f7f5ff');
+  vineQ(158, 48, 36, r); vineQ(190, 48, 24, r);
+  // телевизор на стене и тумба
+  Q(199, 53, 62, 32, '#08070f'); Q(200, 54, 60, 30, '#1b1828'); Q(200, 54, 60, 1, '#3a3654'); Q(203, 57, 54, 23, '#16203e'); Q(226, 84, 8, 3, '#2d2a40');
+  Q(195, 87, 70, 16, '#3a2416'); Q(196, 88, 68, 6, '#9a6a44'); Q(196, 88, 68, 1, '#b8875c'); Q(196, 94, 68, 8, '#7a5236');
+  for (let k = 0; k < 3; k++) { Q(198 + k * 22, 95, 20, 6, '#8a5f3f'); Q(198 + k * 22, 95, 20, 1, '#9e714d'); q(207 + k * 22, 98, '#e0c08a'); q(208 + k * 22, 98, '#e0c08a'); }
+  Q(203, 89, 12, 4, '#2d2a40'); Q(203, 89, 12, 1, '#4a4560'); q(212, 91, '#7fe0b4'); Q(240, 89, 6, 3, '#f7f5ff'); Q(241, 88, 4, 1, '#b9a8ff');
+  potQ(255, 93, '#b5643c');
+  // постер с фениксом
+  Q(271, 53, 30, 28, '#0e0b1c'); Q(272, 54, 28, 26, '#241c4a'); Q(273, 55, 26, 1, '#3a2f70');
+  for (let i = 0; i < 10; i++) { const c = mix('#ff5c5c', '#ffcf5c', i / 10); Q(285 - i, 59 + i, 2, 2, c); Q(285 + i, 59 + i, 2, 2, c); }
+  Q(285, 57, 2, 14, '#ff8a5c'); Q(285, 56, 2, 2, '#ffe7a3');
+  vineQ(306, 48, 32, r);
+  // доска задач
+  Q(315, 51, 70, 34, '#0e0b1c'); Q(316, 52, 68, 32, '#cfc9e3'); Q(318, 54, 64, 27, '#fbfaff'); Q(320, 56, 18, 2, '#4A37C9'); Q(340, 56, 8, 2, '#b9a8ff');
+  for (let c = 0; c < 3; c++) {
+    const cx0 = 320 + c * 21;
+    Q(cx0, 60, 18, 2, ['#b9a8ff', '#ffcf5c', '#7fe0b4'][c]);
+    for (let k = 0; k < 3 - (c === 1 ? 1 : 0); k++) { const nc = ['#ffcf5c', '#7fe0b4', '#ff9ab8', '#9cc8ff'][(c + k) % 4]; Q(cx0 + 1, 64 + k * 6, 15, 4, nc); Q(cx0 + 3, 65 + k * 6, 8, 1, shade(nc, 0.7)); Q(cx0 + 3, 67 + k * 6, 5, 1, shade(nc, 0.75)); }
+  }
+  Q(318, 81, 64, 2, '#a49cc4'); Q(330, 80, 4, 1, '#e0453c'); Q(337, 80, 4, 1, '#4A37C9');
+  // окна с небом и городом
+  const grey = isGrey() && phase !== 'night', sky = grey || winter && phase !== 'night' ? SKY_GREY[phase] : SKY[phase], night = phase === 'night';
+  for (const wx of WINDOWS) {
+    const X = wx * 2, gx = X + 1, gy = 53, gw = 50, gh = 30;
+    Q(X - 3, 49, 58, 38, '#0e0b1c'); Q(X - 2, 50, 56, 36, '#2b2548');
+    for (let y = 0; y < gh; y++) { const k = y / (gh - 1) * 2; Q(gx, gy + y, gw, 1, k < 1 ? mix(sky[0], sky[1], k) : mix(sky[1], sky[2], k - 1)); }
+    if (night) {
+      for (let i = 0; i < 9; i++) q(gx + r() * gw, gy + r() * 14, r() < 0.7 ? '#ffffff' : '#b9a8ff');
+      if (wx === WINDOWS[1] && !grey) { discQ(gx + 38, gy + 7, 4, '#fff6d8'); discQ(gx + 40, gy + 6, 3, sky[0]); }
+    } else if (!grey && !winter) { Q(gx + 6, gy + 6, 14, 3, '#ffffff'); Q(gx + 9, gy + 4, 8, 2, '#ffffff'); Q(gx + 30, gy + 10, 10, 2, '#eef6ff'); }
+    else { Q(gx + 2, gy + 4, 24, 4, '#d5dbe6'); Q(gx + 6, gy + 2, 12, 2, '#dfe4ec'); Q(gx + 28, gy + 8, 20, 3, '#c9d0de'); }
+    let x = gx;
+    while (x < gx + gw) {
+      const bw = Math.min(4 + (r() * 6 | 0), gx + gw - x), bh = 6 + (r() * 14 | 0);
+      const col = night ? ['#1c1840', '#231d4a', '#2a2356'][r() * 3 | 0] : ['#6f84b8', '#8094c4', '#7b8fc0'][r() * 3 | 0];
+      Q(x, gy + gh - bh, bw, bh, col); Q(x, gy + gh - bh, 1, bh, shade(col, 1.12));
+      for (let yy = gy + gh - bh + 2; yy < gy + gh - 1; yy += 3) for (let xx = x + 1; xx < x + bw - 1; xx += 2) if (r() < (night ? 0.45 : 0.3)) q(xx, yy, night ? (r() < 0.8 ? '#ffd98a' : '#9cc8ff') : '#c4e2f6');
+      if (winter) Q(x, gy + gh - bh, bw, 1, '#f4f7fd');
+      x += bw;
+    }
+    for (let i = 0; i < 7; i++) { q(gx + 3 + i, gy + 12 - i, 'rgba(255,255,255,0.16)'); q(gx + 30 + i, gy + 16 - i, 'rgba(255,255,255,0.12)'); }
+    Q(X + 24, 50, 3, 36, '#2b2548'); Q(X + 25, 50, 1, 36, '#3e3666');
+    Q(X - 4, 84, 60, 4, '#f3f0fb'); Q(X - 4, 87, 60, 1, '#c9bfe8');
+    potQ(X + 6, 85, '#b5643c', season === 'spring' ? '#ff9ab8' : null); potQ(X + 46, 85, '#eeeaf6');
   }
   // часы
-  disc(262, 32, 6, '#120f24'); disc(262, 32, 5, '#1D1A33'); disc(262, 32, 4, '#ffffff');
-  for (const [dx, dy] of [[0, -3], [3, 0], [0, 3], [-3, 0]]) P(262 + dx, 32 + dy, '#b9b2d6');
-  vine(268, 24, 14, r);
-  // кухня: шкафчики, тёмная столешница с техникой, холодильник с магнитами, кулер
-  shell(272, 25, 34, 11, '#f3f0fb'); R(272, 35, 34, 1, '#c9c1e6'); for (let x = 280; x < 306; x += 8) { R(x, 25, 1, 10, '#d8d0ec'); R(x - 2, 29, 1, 3, '#9a8fb8'); }
-  furn(272, 44, 34, 3, 5, '#5b5670'); R(272, 47, 34, 5, '#e9e5f3'); R(272, 47, 34, 1, '#c9c1e6'); for (let x = 280; x < 306; x += 8) { R(x, 47, 1, 5, '#cfc8e6'); P(x - 2, 49, '#9a8fb8'); }
-  shell(275, 38, 9, 9, '#2d2a40'); R(276, 39, 7, 3, '#141220'); P(282, 43, '#ff5c5c'); R(278, 44, 3, 2, '#f7f5ff');
-  shell(288, 44, 8, 3, '#9ca3b8'); R(289, 45, 6, 1, '#6c7388'); P(291, 43, '#c9cfdc');
-  shell(298, 38, 8, 6, '#cfd3e0'); R(299, 39, 5, 4, '#2a2838'); P(305, 40, '#7fe0b4');
-  shell(298, 56, 9, 21, '#e6e9f2'); R(298, 56, 9, 1, '#ffffff'); R(298, 66, 9, 1, '#b8bfd0'); R(299, 60, 1, 4, '#9ca3b8'); R(299, 69, 1, 4, '#9ca3b8');
-  R(302, 58, 2, 2, '#ffcf5c'); P(305, 61, '#ff9ab8'); R(302, 63, 2, 2, '#5cc8ff'); P(305, 70, '#7fe0b4');
-  shell(300, 82, 7, 11, '#d9dde8'); R(300, 77, 7, 6, '#4aa8ff'); R(301, 77, 5, 6, '#7fc8ff'); R(301, 77, 1, 5, '#c8e8ff'); P(300, 86, '#5cc8ff'); P(300, 88, '#ff5c5c');
+  discQ(524, 64, 12, '#0e0b1c'); discQ(524, 64, 11, '#2b2548'); discQ(524, 64, 9, '#ffffff'); discQ(525, 65, 8, '#f3f0fb');
+  for (let k = 0; k < 12; k++) { const a = k / 12 * 6.283; q(524 + Math.round(Math.cos(a) * 8), 64 + Math.round(Math.sin(a) * 8), k % 3 ? '#b9b2d6' : '#1D1A33'); }
+  vineQ(536, 48, 28, r);
+  // кухня: шкафчики, столешница с кофемашиной, чайником и микроволновкой, холодильник, кулер
+  Q(543, 49, 70, 24, '#8f86b0'); Q(544, 50, 68, 22, '#f6f4fc'); Q(544, 50, 68, 1, '#ffffff'); Q(544, 70, 68, 2, '#c9c1e6');
+  for (let k = 0; k < 4; k++) { Q(544 + k * 17 + 16, 50, 1, 20, '#d8d0ec'); Q(544 + k * 17 + (k % 2 ? 3 : 12), 58, 1, 5, '#9a8fb8'); }
+  Q(543, 87, 70, 18, '#3a3550'); Q(544, 88, 68, 6, '#5b5670'); Q(544, 88, 68, 1, '#7a7494'); Q(544, 94, 68, 10, '#ece8f6'); Q(544, 94, 68, 1, '#cfc8e6');
+  for (let k = 1; k < 4; k++) Q(544 + k * 17, 94, 1, 10, '#cfc8e6');
+  for (let k = 0; k < 4; k++) Q(549 + k * 17, 98, 6, 1, '#9a8fb8');
+  Q(549, 75, 20, 20, '#0e0b1c'); Q(550, 76, 18, 18, '#2d2a40'); Q(550, 76, 18, 2, '#4a4560'); Q(552, 79, 14, 5, '#141220'); q(563, 80, '#ff5c5c'); Q(554, 81, 4, 1, '#7fe0b4'); Q(557, 86, 4, 2, '#141220'); Q(556, 89, 6, 4, '#f7f5ff'); q(562, 90, '#d8d0f0');
+  Q(576, 83, 10, 7, '#6c7388'); Q(577, 83, 8, 6, '#9ca3b8'); Q(577, 83, 8, 1, '#c9cfdc'); Q(578, 80, 6, 2, '#6c7388'); q(586, 85, '#6c7388');
+  Q(595, 75, 18, 14, '#6c7388'); Q(596, 76, 16, 12, '#cfd3e0'); Q(597, 78, 10, 8, '#2a2838'); q(598, 79, '#4a4560'); Q(609, 78, 2, 1, '#7fe0b4'); Q(609, 81, 2, 1, '#9ca3b8'); Q(609, 84, 2, 1, '#9ca3b8');
+  Q(595, 111, 20, 44, '#6c7388'); Q(596, 112, 18, 42, '#dfe3ee'); Q(596, 112, 18, 1, '#ffffff'); Q(613, 112, 1, 42, '#bcc3d4'); Q(596, 132, 18, 1, '#aab1c4');
+  Q(598, 118, 1, 8, '#9ca3b8'); Q(598, 136, 1, 8, '#9ca3b8');
+  Q(604, 116, 3, 3, '#ffcf5c'); Q(609, 121, 2, 2, '#ff9ab8'); Q(603, 125, 3, 2, '#5cc8ff'); Q(606, 137, 6, 7, '#fff6c8'); Q(607, 139, 4, 1, '#b9b2d6'); Q(607, 141, 3, 1, '#b9b2d6'); Q(602, 146, 2, 2, '#7fe0b4');
+  Q(601, 153, 12, 13, '#2a7ad0'); Q(602, 154, 10, 12, '#7fc8ff'); Q(603, 155, 2, 9, '#c8e8ff'); Q(605, 166, 4, 2, '#4aa8ff');
+  Q(599, 168, 16, 21, '#7d8296'); Q(600, 168, 14, 20, '#e1e5ef'); Q(600, 168, 14, 1, '#ffffff'); Q(602, 173, 2, 2, '#5cc8ff'); Q(602, 177, 2, 2, '#ff5c5c'); Q(601, 182, 12, 1, '#b8bfd0');
   // коврик под кухонным столом
-  disc(294, 119, 11, '#cdbfa8', 0.6); disc(294, 119, 10, '#dccfb8', 0.6); disc(294, 119, 7, '#d3c5ad', 0.6);
+  discQ(588, 238, 22, '#bfb098', 0.6); discQ(588, 238, 20, '#dccfb8', 0.6); discQ(588, 238, 14, '#d3c5ad', 0.6);
   // бра на левой стене
-  R(77, 60, 2, 3, '#4a3a70'); P(78, 59, '#ffe7a3');
-  // низкая полка у аркады с книгами и лампой
-  furn(97, 125, 18, 2, 7, '#7a5236'); R(98, 128, 16, 4, '#4f3624');
-  for (let k = 0; k < 5; k++) R(99 + k * 2, 128, 1, 4, ['#e0745f', '#5cc8ff', '#ffd35c', '#b9a8ff', '#7fe0b4'][k]);
-  R(110, 128, 3, 4, '#2d2a40'); R(111, 121, 2, 3, '#ffe7a3'); R(111, 124, 2, 1, '#6b4a33');
-  bigPlant(101, 125, 7, r);
-  // коврик и лежанка кота
-  R(123, 119, 17, 9, '#6a5a88'); R(124, 120, 15, 7, '#8a7aa8'); for (let x = 124; x < 139; x += 2) { P(x, 118, '#6a5a88'); P(x, 128, '#6a5a88'); }
+  Q(154, 120, 4, 7, '#4a3a70'); Q(155, 116, 4, 4, '#ffe7a3'); q(156, 116, '#fff6d8');
+  // низкая полка у аркады: книги, лампа, растение
+  Q(193, 249, 38, 20, '#3a2416'); Q(194, 250, 36, 4, '#8a5c3a'); Q(194, 250, 36, 1, '#a8764a'); Q(194, 254, 36, 14, '#5a3d28'); Q(196, 256, 32, 10, '#3a2618');
+  for (let k = 0; k < 5; k++) Q(198 + k * 3, 257, 2, 9, BOOKS[k]);
+  Q(214, 259, 6, 7, '#2d2a40'); Q(222, 258, 5, 8, '#b9a8ff');
+  Q(220, 247, 9, 3, '#2d2a40'); Q(224, 241, 1, 6, '#2d2a40'); Q(220, 235, 9, 6, '#ffe7a3'); Q(220, 235, 9, 1, '#fff6d8'); Q(221, 240, 7, 1, '#e8c27a');
+  bigPlantQ(202, 250, 14, r);
+  // коврик для кота
+  Q(246, 238, 34, 18, '#5a4a78'); Q(248, 240, 30, 14, '#8a7aa8'); Q(250, 242, 26, 10, '#9d8ebb');
+  for (let x = 248; x < 279; x += 3) { q(x, 237, '#6a5a88'); q(x, 256, '#6a5a88'); }
   // торшер у дивана
-  disc(82, 104, 2, '#2d2a40', 0.6); R(82, 92, 1, 12, '#2d2a40'); shell(80, 89, 5, 3, '#ffe2a0');
-  // растения в кадках
-  bigPlant(149, 54, 10, r); bigPlant(160, 157, 10, r); bigPlant(266, 157, 11, r); bigPlant(303, 157, 12, r, '#b5643c'); bigPlant(278, 157, 8, r);
+  discQ(165, 208, 4, '#2d2a40', 0.6); Q(164, 184, 2, 24, '#2d2a40'); Q(158, 176, 14, 9, '#3a2416'); Q(159, 177, 12, 7, '#ffe2a0'); Q(159, 177, 12, 1, '#fff3cf'); Q(160, 183, 10, 1, '#e8c27a');
+  // растения в кадках и цветочные ящики у входа
+  bigPlantQ(298, 108, 20, r); bigPlantQ(320, 314, 20, r); bigPlantQ(532, 314, 22, r); bigPlantQ(606, 314, 24, r, '#b5643c'); bigPlantQ(556, 314, 16, r);
+  planterQ(332, 296, 30, r); planterQ(406, 296, 30, r);
+  // живая изгородь вдоль здания
+  for (const [x0, x1] of [[152, 364], [404, 616]]) {
+    const dark = autumn ? '#4f5a26' : '#1f4f2c', mid = autumn ? '#6c7836' : '#357a44', hi = autumn ? '#8d9a48' : '#4f9c5c';
+    Q(x0, 330, x1 - x0, 6, dark);
+    for (let x = x0 + 3; x < x1 - 2; x += 7) { discQ(x, 331, 4, dark); discQ(x - 1, 330, 3, mid); q(x - 2, 328, hi); q(x, 329, hi); q(x + 1, 331, shade(mid, 1.1)); }
+    if (winter) { for (let x = x0; x < x1; x++) Q(x, 326 + (Math.sin(x * 0.5) > 0.5 ? 0 : 1), 1, 3, '#f4f7fd'); continue; }
+    for (let x = x0 + 4; x < x1; x += 6) { const c = autumn ? ['#d06a2c', '#eeb03a', '#9c3f2b'][(x / 6 | 0) % 3] : ['#ffffff', '#ffd35c', '#ff9ab8'][(x / 6 | 0) % 3]; q(x, 330 + (x % 3), c); }
+  }
   cur = g;
 }
 
 // ---------- деревья: спрайты по сезону, качаются от ветра ----------
 let treeSprites = [];
 function buildTrees() {
+  const L = LOOK[season];
   treeSprites = TREES.map(([cx, cy, s], i) => {
-    const pad = s + 6, c = document.createElement('canvas'); c.width = c.height = pad * 2;
-    const t2 = c.getContext('2d'); cur = t2;
-    const r = rng(100 + i), L = LOOK[season];
-    if (season !== 'winter') disc(pad + 3, pad + 4, s, 'rgba(0,0,0,0.22)');
+    const Rf = s * 2, pad = Rf + 14, c = document.createElement('canvas'); c.width = c.height = pad * 2;
+    const t2 = c.getContext('2d'); t2.setTransform(S, 0, 0, S, 0, 0); cur = t2;
+    const r = rng(100 + i);
+    discQ(pad + 4, pad + Rf * 0.75, Rf * 0.85, 'rgba(0,0,0,0.2)', 0.45);
+    Q(pad - 3, pad + Rf * 0.3, 7, Rf * 0.7, '#3e281a'); Q(pad - 2, pad + Rf * 0.3, 2, Rf * 0.7, '#6b4a33');
     if (!L.leaf) {
       // голые ветки со снегом
-      disc(pad, pad, 2, '#5a3d2b');
-      for (let k = 0; k < 7; k++) {
-        const a = k / 7 * 6.28 + r() * 0.5, len = s * (0.6 + r() * 0.4);
+      discQ(pad, pad, 3, '#4a3020');
+      for (let k = 0; k < 8; k++) {
+        const a = k / 8 * 6.28 + r() * 0.5, len = Rf * (0.6 + r() * 0.4);
         const ex = pad + Math.cos(a) * len, ey = pad + Math.sin(a) * len;
-        line(pad, pad, ex, ey, '#5a3d2b');
-        const mx = pad + Math.cos(a) * len * 0.6, my = pad + Math.sin(a) * len * 0.6;
-        line(mx, my, mx + Math.cos(a + 0.7) * len * 0.35, my + Math.sin(a + 0.7) * len * 0.35, '#6b4a33');
-        for (let q = 0; q < 4; q++) { const d = r() * len; P(pad + Math.cos(a) * d, pad + Math.sin(a) * d - 1, '#ffffff'); }
+        lineQ(pad, pad, ex, ey, '#4a3020'); lineQ(pad + 1, pad, ex + 1, ey, '#6b4a33');
+        const mx = pad + Math.cos(a) * len * 0.55, my = pad + Math.sin(a) * len * 0.55;
+        lineQ(mx, my, mx + Math.cos(a + 0.7) * len * 0.4, my + Math.sin(a + 0.7) * len * 0.4, '#5a3d2b');
+        lineQ(mx, my, mx + Math.cos(a - 0.6) * len * 0.3, my + Math.sin(a - 0.6) * len * 0.3, '#5a3d2b');
+        for (let qn = 0; qn < 6; qn++) { const d = r() * len; Q(pad + Math.cos(a) * d, pad + Math.sin(a) * d - 1, 2, 1, '#ffffff'); }
       }
     } else {
-      disc(pad, pad, s + 1, shade(L.leaf[0], 0.6)); disc(pad, pad, s, L.leaf[0]);
-      for (let k = 0; k < 5; k++) { const a = k / 5 * 6.28 + 0.4, d2 = s * 0.45; disc(pad + Math.cos(a) * d2 - 1, pad + Math.sin(a) * d2 - 1, Math.max(2, s * 0.45 | 0), L.leaf[1]); }
-      disc(pad - 2, pad - 2, Math.max(2, s - 5), L.leaf[1]); disc(pad - 3, pad - 3, Math.max(2, s - 7), L.leaf[2]);
-      for (let k = 0; k < 4; k++) { const a = k / 4 * 6.28 + 1, d2 = s * 0.5; disc(pad + Math.cos(a) * d2 - 2, pad + Math.sin(a) * d2 - 2, 1, shade(L.leaf[2], 1.12)); }
-      for (let k = 0; k < s * 3; k++) { const a = r() * 6.28, d = r() * (s - 1); P(pad + Math.cos(a) * d, pad + Math.sin(a) * d, r() < 0.5 ? shade(L.leaf[0], 0.9) : L.leaf[2]); }
-      if (L.bloom) for (let k = 0; k < s * 2; k++) { const a = r() * 6.28, d = r() * (s - 1); P(pad + Math.cos(a) * d, pad + Math.sin(a) * d, L.bloom[r() * 2 | 0]); }
-      if (season === 'autumn') for (let k = 0; k < s; k++) { const a = r() * 6.28, d = r() * (s - 1); P(pad + Math.cos(a) * d, pad + Math.sin(a) * d, '#ffd35c'); }
+      // крона из нескольких «шапок»: тёмный контур, середина, светлый бок слева сверху
+      const [d0, d1, d2] = L.leaf, ol = shade(d0, 0.5), blobs = [[0, 0, Rf * 0.6]];
+      for (let k = 0; k < 6; k++) { const a = k / 6 * 6.28 + r() * 0.5, d = Rf * 0.42; blobs.push([Math.cos(a) * d, Math.sin(a) * d * 0.9, Rf * (0.42 + r() * 0.1)]); }
+      blobs.sort((p, q2) => p[1] - q2[1]);
+      for (const [bx, by, br] of blobs) discQ(pad + bx, pad + by, br + 1.5, ol);
+      for (const [bx, by, br] of blobs) { discQ(pad + bx, pad + by, br, d0); discQ(pad + bx - br * 0.18, pad + by - br * 0.22, br * 0.74, d1); }
+      for (const [bx, by, br] of blobs) discQ(pad + bx - br * 0.38, pad + by - br * 0.42, Math.max(1, br * 0.32), d2);
+      for (let k = 0; k < Rf * 7; k++) { const a = r() * 6.28, d = r() * Rf * 0.95; q(pad + Math.cos(a) * d, pad + Math.sin(a) * d, r() < 0.55 ? shade(d0, 0.82) : shade(d2, 1.1)); }
+      if (L.bloom) for (let k = 0; k < Rf * 3; k++) { const a = r() * 6.28, d = r() * Rf * 0.9; Q(pad + Math.cos(a) * d, pad + Math.sin(a) * d, 2, 2, L.bloom[r() * 2 | 0]); }
+      if (season === 'autumn') for (let k = 0; k < Rf * 1.5; k++) { const a = r() * 6.28, d = r() * Rf * 0.9; q(pad + Math.cos(a) * d, pad + Math.sin(a) * d, '#ffd35c'); }
     }
     if (SHADOW[phase]) { t2.globalCompositeOperation = 'source-atop'; t2.fillStyle = SHADOW[phase]; t2.fillRect(0, 0, c.width, c.height); }
     cur = g;
-    return { c, x: cx - pad, y: cy - pad, seed: i * 1.7 };
+    return { c, x: (cx * 2 - pad) / S, y: (cy * 2 - pad) / S, w: c.width / S, seed: i * 1.7 };
   });
 }
 
-// ---------- ветер, погода, мерцание ----------
+// ---------- ветер, мерцание ----------
 let gust = 0;
 function windNow(t) {
-  const k = season === 'autumn' ? 1.25 : 1;
-  gust = Math.min(1, k * Math.max(0, 0.25 + 0.75 * Math.sin(t * 0.21) * Math.sin(t * 0.077 + 1)));
+  gust = Math.max(0, 0.25 + 0.75 * Math.sin(t * 0.21) * Math.sin(t * 0.077 + 1));
+  if (weather === 'wind') gust = Math.max(gust, 0.6 + 0.4 * Math.abs(Math.sin(t * 0.33)));
+  if (weather === 'storm') gust = Math.max(gust, 0.55 + 0.3 * Math.abs(Math.sin(t * 0.5)));
+  gust = Math.min(1, gust);
   return gust;
 }
 function flicker(t) {
@@ -393,26 +587,27 @@ function flicker(t) {
 const streaks = [];
 let streakAcc = 0;
 function windStep(dt) {
-  streakAcc += dt * (0.5 + gust * 2.4) * (season === 'autumn' ? 1.4 : 1);
+  streakAcc += dt * (0.5 + gust * 2.4) * (weather === 'wind' ? 1.6 : 1);
   while (streakAcc > 1) {
     streakAcc--;
-    if (streaks.length >= 12) continue;
+    if (streaks.length >= 14) continue;
     const top = Math.random() < 0.6;
     streaks.push({ x: -10 - Math.random() * 30, y: top ? rand(2, 17) : rand(24, 158), len: rand(16, 42), v: rand(70, 130), amp: rand(0.6, 2.4), ph: rand(0, 6), fr: rand(0.1, 0.22) });
   }
   for (const s of streaks) s.x += s.v * dt * (0.6 + gust * 0.8);
   for (let i = streaks.length - 1; i >= 0; i--) if (streaks[i].x - streaks[i].len > W) streaks.splice(i, 1);
 }
+// линии ветра тонкие (в мелкий пиксель) и проходят за зданием
 function drawStreaks(t) {
   const night = phase !== 'day', col = night ? '170,215,255' : '255,255,255', base = night ? 0.75 : 0.62;
-  for (const s of streaks) for (let i = 0; i < s.len; i++) {
-    const px = Math.round(s.x - i);
-    if (px < 0 || px >= W) continue;
-    const py = Math.round(s.y + Math.sin(px * s.fr + s.ph + t * 2) * s.amp);
-    if (inBuilding(px, py) || inSign(px, py)) continue;          // линия проходит за зданием
-    const a = base * (1 - i / s.len) * Math.min(1, i / 3 + 0.3);
-    g.fillStyle = `rgba(${col},${a.toFixed(2)})`; g.fillRect(px, py, 1, 1);
-    if (night) { g.fillStyle = `rgba(${col},${(a * 0.25).toFixed(2)})`; g.fillRect(px, py - 1, 1, 1); g.fillRect(px, py + 1, 1, 1); }
+  for (const s of streaks) for (let i = 0; i < s.len * S; i++) {
+    const fx = Math.round(s.x * S - i);
+    if (fx < 0 || fx >= W * S) continue;
+    const fy = Math.round(s.y * S + Math.sin(fx / S * s.fr + s.ph + t * 2) * s.amp * S);
+    if (inBuilding(fx / S, fy / S) || inSign(fx / S, fy / S)) continue;
+    const a = base * (1 - i / (s.len * S)) * Math.min(1, i / 6 + 0.3);
+    g.fillStyle = `rgba(${col},${a.toFixed(2)})`; g.fillRect(fx / S, fy / S, 1 / S, 1 / S);
+    if (night) { g.fillStyle = `rgba(${col},${(a * 0.25).toFixed(2)})`; g.fillRect(fx / S, (fy - 1) / S, 1 / S, 1 / S); g.fillRect(fx / S, (fy + 1) / S, 1 / S, 1 / S); }
   }
 }
 // подсветка за зданием: мягкое свечение над крышей, мерцает от порывов
@@ -422,71 +617,118 @@ function drawBacklight(t) {
   for (let i = 0; i < 8; i++) { g.fillStyle = `rgba(140,110,255,${(a * (1 - i / 8) * 0.6).toFixed(3)})`; g.fillRect(66 - i, 19 - i, 252 + i * 2, 1); }
   for (let i = 0; i < 5; i++) { g.fillStyle = `rgba(140,110,255,${(a * (1 - i / 5) * 0.35).toFixed(3)})`; g.fillRect(71 - i, 20, 1, 140); g.fillRect(312 + i, 20, 1, 140); }
   // неон вывески
-  g.fillStyle = `rgba(125,110,240,${(0.55 * f).toFixed(2)})`; g.fillRect(148, 2, 88, 1); g.fillRect(148, 19, 88, 1); g.fillRect(147, 3, 1, 16); g.fillRect(236, 3, 1, 16);
+  cur = g;
+  Q(295, 5, 178, 1, `rgba(255,140,220,${(0.5 * f).toFixed(2)})`); Q(295, 34, 178, 1, `rgba(140,200,255,${(0.5 * f).toFixed(2)})`);
+  Q(295, 5, 1, 30, `rgba(255,90,160,${(0.6 * f).toFixed(2)})`); Q(472, 5, 1, 30, `rgba(92,200,255,${(0.6 * f).toFixed(2)})`);
+  glow(192, 10, 50, 10, '150,120,255', (phase === 'day' ? 0.06 : 0.16) * f);
   g.globalCompositeOperation = 'source-over';
 }
 
+// ---------- погода: дождь, гроза, снег, туман, ветер с листьями ----------
 const drops = [], splashes = [], ripples = [];
+let flash = 0, nextFlash = 0, flash2 = 0;
+const fogBands = Array.from({ length: 7 }, (_, i) => ({ x: rand(-60, W), y: 10 + i * 30 + rand(-8, 8), rx: rand(50, 90), ry: rand(9, 16), v: rand(3, 7) }));
 function weatherK(t) { return 0.55 + 0.45 * Math.sin(t / 70); }     // сила дождя или снега плавно меняется, но не пропадает
+const ramp = t => Math.min(1, Math.max(0, (t - weatherSince) / 12));   // новая погода набирает силу ~12 с
 function weatherStep(dt, t) {
-  const k = weatherK(t), maxN = { summer: 150, winter: 130, autumn: 28, spring: 30 }[season];
-  const want = Math.round(maxN * (season === 'autumn' || season === 'spring' ? 1 : k));
+  if (!weatherSince) weatherSince = t;
+  const k = weatherK(t), rp = ramp(t);
+  const want = Math.round(rp * ({
+    rain: 150 * k, storm: 280, snow: 140 * k, fog: 0,
+    wind: season === 'winter' ? 90 : 45,
+    clear: season === 'spring' ? 14 : season === 'autumn' ? 12 : 0,
+  })[weather]);
   while (drops.length < want) drops.push(newDrop(true));
   if (drops.length > want) drops.length = want;
+  const storm = weather === 'storm';
   for (const d of drops) {
-    if (season === 'summer') {
-      d.y += d.v * dt; d.x += gust * 40 * dt;
+    if (d.type === 'rain') {
+      d.y += d.v * dt; d.x += (gust * 40 + (storm ? 50 : 0)) * dt;
       if (d.y > d.end) { if (!inBuilding(d.x, d.end)) splashes.push({ x: d.x, y: d.end, life: 0.18 }); Object.assign(d, newDrop(false)); }
-    } else if (season === 'winter') {
+    } else if (d.type === 'snow') {
       d.y += d.v * dt; d.x += (Math.sin(t * 1.3 + d.ph) * 6 + gust * 16) * dt;
       if (d.y > H + 2 || d.x > W + 4) Object.assign(d, newDrop(false));
+    } else if (d.type === 'drift') {
+      d.x += (50 + gust * 90) * dt * d.v / 20; d.y += (4 + Math.sin(t * 3 + d.ph) * 8) * dt;
+      if (d.x > W + 4 || d.y > H + 4) Object.assign(d, newDrop(false), { x: -4, y: rand(0, H) });
     } else {
-      d.x += (25 + gust * 70) * dt * d.v / 20; d.y += (8 + Math.sin(t * 2 + d.ph) * 14) * dt;
+      const wk = weather === 'wind' ? 1.7 : 1;
+      d.x += (25 + gust * 70) * wk * dt * d.v / 20; d.y += (8 + Math.sin(t * 2 + d.ph) * 14) * dt;
       if (d.x > W + 4 || d.y > H + 4) Object.assign(d, newDrop(false), { x: -4, y: rand(0, H) });
     }
   }
   for (const s of splashes) s.life -= dt;
   for (let i = splashes.length - 1; i >= 0; i--) if (splashes[i].life <= 0) splashes.splice(i, 1);
-  if (season === 'summer') {
-    if (Math.random() < dt * 6 * k) { const [x, y, s] = pick(PUDDLES); ripples.push({ x: x + rand(-s + 2, s - 2), y: y + rand(-1, 1), r: 0 }); }
-    for (const q of ripples) q.r += dt * 5;
+  if (isWet()) {
+    if (Math.random() < dt * 6 * k * rp) { const [x, y, s] = pick(PUDDLES); ripples.push({ x: x + rand(-s + 2, s - 2), y: y + rand(-1, 1), r: 0 }); }
+    for (const q2 of ripples) q2.r += dt * 5;
     for (let i = ripples.length - 1; i >= 0; i--) if (ripples[i].r > 3.5) ripples.splice(i, 1);
   } else ripples.length = 0;
+  // гроза: вспышка молнии каждые 7–18 секунд, иногда двойная
+  flash = Math.max(0, flash - dt * 3.2);
+  if (storm && rp > 0.5) {
+    if (!nextFlash) nextFlash = t + rand(3, 8);
+    if (t > nextFlash) {
+      flash = 1; nextFlash = t + rand(7, 18); flash2 = Math.random() < 0.5 ? t + 0.22 : 0;
+      const near = [...agents.values()].filter(a => !a.arriving && arrived(a) && !a.leaving);
+      if (near.length && Math.random() < 0.45) say(pick(near), pick(LINES.flash), t, false);
+    }
+    if (flash2 && t > flash2) { flash = 0.8; flash2 = 0; }
+  } else nextFlash = 0;
+  for (const f of fogBands) { f.x += f.v * dt * (1 + gust); if (f.x - f.rx > W) { f.x = -f.rx - rand(0, 40); f.y = rand(5, 205); } }
 }
 function newDrop(first) {
   const x = rand(-40, W), y = first ? rand(0, H) : rand(-30, -4);
-  if (season === 'summer') return { x, y, v: rand(170, 230), end: rand(0, H) };
-  if (season === 'winter') return { x, y, v: rand(10, 26), ph: rand(0, 6), big: Math.random() < 0.18 };
-  return { x: rand(0, W), y: rand(0, H), v: rand(14, 28), ph: rand(0, 6), col: season === 'autumn' ? pick(['#d06a2c', '#eeb03a', '#9c3f2b', '#e0745f']) : pick(['#ffb3cf', '#ffd6e6', '#ffffff']) };
+  if (isWet()) return { type: 'rain', x, y, v: rand(170, 230) * (weather === 'storm' ? 1.25 : 1), end: rand(0, H) };
+  if (weather === 'snow') return { type: 'snow', x, y, v: rand(10, 26), ph: rand(0, 6), big: Math.random() < 0.18 };
+  if (season === 'winter') return { type: 'drift', x: rand(0, W), y: rand(0, H), v: rand(14, 28), ph: rand(0, 6) };
+  const col = season === 'autumn' ? ['#d06a2c', '#eeb03a', '#9c3f2b', '#e0745f'] : season === 'spring' ? ['#ffb3cf', '#ffd6e6', '#ffffff'] : ['#4f9c5c', '#7fc46a', '#357d44'];
+  return { type: 'leaf', x: rand(0, W), y: rand(0, H), v: rand(14, 28), ph: rand(0, 6), col: pick(col) };
 }
+const visible = (x, y) => !inBuilding(x, y) || inWindow(x, y);
 function drawWeather(t) {
-  const night = phase === 'night';
-  if (season === 'summer') {
-    g.fillStyle = night ? 'rgba(150,175,235,0.5)' : 'rgba(205,225,255,0.6)';
-    const sx = gust * 0.7;
-    for (const d of drops) {
-      const x = Math.round(d.x), y = Math.round(d.y);
-      for (let i = 0; i < 4; i++) { const px = Math.round(x - sx * i), py = y - i; if (!inBuilding(px, py) || inWindow(px, py)) g.fillRect(px, py, 1, 1); }
-    }
-    g.fillStyle = 'rgba(220,235,255,0.7)';
-    for (const s of splashes) { g.fillRect(Math.round(s.x) - 1, Math.round(s.y), 1, 1); g.fillRect(Math.round(s.x) + 1, Math.round(s.y), 1, 1); }
-    g.fillStyle = 'rgba(200,220,255,0.45)';
-    for (const q of ripples) { const rr = Math.round(q.r); g.fillRect(Math.round(q.x) - rr, Math.round(q.y), 1, 1); g.fillRect(Math.round(q.x) + rr, Math.round(q.y), 1, 1); if (rr > 1) { g.fillRect(Math.round(q.x), Math.round(q.y) - 1, 1, 1); } }
-  } else if (season === 'winter') {
-    for (const d of drops) {
-      const x = Math.round(d.x), y = Math.round(d.y);
-      if (inBuilding(x, y) && !inWindow(x, y)) continue;
-      g.fillStyle = d.big ? '#ffffff' : 'rgba(255,255,255,0.8)';
-      g.fillRect(x, y, d.big ? 2 : 1, d.big ? 2 : 1);
-    }
-  } else {
-    for (const d of drops) {
-      const x = Math.round(d.x), y = Math.round(d.y);
-      if (inBuilding(x, y) && !inWindow(x, y)) continue;
+  const night = phase === 'night', sx = (gust * 0.7 + (weather === 'storm' ? 0.6 : 0)) * S;
+  const dot = (fx, fy, w = 1, h = 1) => g.fillRect(Math.round(fx) / S, Math.round(fy) / S, w / S, h / S);
+  g.fillStyle = night ? 'rgba(170,195,255,0.7)' : 'rgba(225,238,255,0.8)';
+  for (const d of drops) if (d.type === 'rain') {
+    const X = d.x * S, Y = d.y * S;
+    for (let i = 0; i < 9; i++) { const px = X - sx * i / 2, py = Y - i * 1.3; if (visible(px / S, py / S)) dot(px, py); }
+  }
+  g.fillStyle = 'rgba(220,235,255,0.7)';
+  for (const s of splashes) { dot(s.x * S - 2, s.y * S - 1); dot(s.x * S + 2, s.y * S - 1); dot(s.x * S, s.y * S); }
+  g.fillStyle = 'rgba(200,220,255,0.45)';
+  for (const q2 of ripples) { const rr = q2.r * S, X = q2.x * S, Y = q2.y * S; dot(X - rr, Y); dot(X + rr, Y); dot(X, Y - rr * 0.4); dot(X, Y + rr * 0.4); }
+  for (const d of drops) {
+    if (d.type === 'rain' || !visible(d.x, d.y)) continue;
+    const X = d.x * S, Y = d.y * S;
+    if (d.type === 'snow' || d.type === 'drift') {
+      g.fillStyle = d.big ? '#ffffff' : 'rgba(255,255,255,0.85)';
+      if (d.big) { dot(X - 1, Y); dot(X + 1, Y); dot(X, Y - 1); dot(X, Y + 1); dot(X, Y); } else dot(X, Y, d.type === 'drift' ? 2 : 1, 1);
+    } else {
       g.fillStyle = d.col;
-      if ((t * 4 + d.ph | 0) % 2) g.fillRect(x, y, 2, 1); else g.fillRect(x, y, 1, 2);
+      if ((t * 4 + d.ph | 0) % 2) dot(X, Y, 3, 2); else dot(X, Y, 2, 3);
+      g.fillStyle = shade(d.col, 0.7); dot(X + 1, Y + 1);
     }
   }
+}
+// туман: медленные полосы над улицей, в здание не заходят
+function drawFog(t) {
+  if (weather !== 'fog') return;
+  const rp = ramp(t), col = phase === 'night' ? '120,128,170' : '228,232,242';
+  g.save();
+  g.beginPath(); g.rect(0, 0, W, H); g.rect(72, 20, 240, 144); g.clip('evenodd');
+  g.fillStyle = `rgba(${col},${(0.24 * rp).toFixed(3)})`; g.fillRect(0, 0, W, H);
+  for (const f of fogBands) {
+    const gr = g.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.rx);
+    gr.addColorStop(0, `rgba(${col},${(0.6 * rp).toFixed(3)})`); gr.addColorStop(1, `rgba(${col},0)`);
+    g.save(); g.translate(f.x, f.y); g.scale(1, f.ry / f.rx); g.translate(-f.x, -f.y);
+    g.fillStyle = gr; g.fillRect(f.x - f.rx, f.y - f.rx, f.rx * 2, f.rx * 2); g.restore();
+  }
+  g.restore();
+}
+function drawFlash() {
+  if (flash <= 0) return;
+  g.fillStyle = `rgba(225,230,255,${(flash * 0.5).toFixed(3)})`; g.fillRect(0, 0, W, H);
 }
 
 // ---------- агенты ----------
@@ -501,13 +743,13 @@ const IDLE_TO_CHILL = FAST ? 6 : 40;                           // секунд �
 const IDLE_TO_SLEEP = 300;                           // на диване после стольких секунд засыпает
 const breakGap = () => FAST ? rand(10, 20) : rand(180, 480);       // как часто работающий агент ходит за кофе или чаем
 
+// новый агент приезжает на такси: пока такси не остановилось у входа, его не видно
 function newAgent(s) {
   const t = performance.now() / 1000;
   const a = { id: s.id, kind: KIND[s.kind] ? s.kind : 'claude', name: s.name, status: s.status, tool: s.tool || '', tagNo: 1,
-    place: streetPlace(), x: 0, y: 176, path: [], pending: null, desk: null, spot: null, leaving: false, brk: null,
+    place: curbPlace(), x: 192, y: 179, path: [], pending: null, desk: null, spot: null, leaving: false, arriving: true, brk: null,
     nextBreak: t + (FAST ? 8 : rand(90, 240)), nextSay: t + rand(4, 10), say: null, greeted: false,
     dir: 'down', ph: Math.random() * 6, idleSince: s.status === 'idle' ? t : null };
-  a.x = spotOf(a.place).x;
   agents.set(s.id, a);
   return a;
 }
@@ -531,8 +773,10 @@ function endBreak(a, t) {
   if (!a.brk) return;
   a.brk.spot.owner = null; a.brk = null; a.nextBreak = t + breakGap();
 }
+// уходящий агент идёт к бордюру и ловит такси
 function leave(a) {
-  a.leaving = true; a.leavePlace = streetPlace();
+  if (a.arriving) { agents.delete(a.id); return; }
+  a.leaving = true; a.leavePlace = curbPlace();
   if (a.desk) { a.desk.owner = null; a.desk = null; }
   if (a.spot) { a.spot.owner = null; a.spot = null; }
   if (a.brk) { a.brk.spot.owner = null; a.brk = null; }
@@ -540,7 +784,7 @@ function leave(a) {
 }
 // иногда агент встаёт из-за стола и идёт за кофе или чаем
 function breakTick(a, t) {
-  if (a.leaving) return;
+  if (a.leaving || a.arriving) return;
   if (a.brk) {
     const there = arrived(a) && a.place === a.brk.spot;
     if (there && !a.brk.until) { a.brk.until = t + rand(10, 18); say(a, pick(LINES[a.brk.spot.act]), t, true); }
@@ -561,10 +805,10 @@ function sync(list) {
     seen.add(s.id);
     const a = agents.get(s.id) || newAgent(s);
     a.name = s.name; a.tool = s.tool || '';
-    if (a.status !== s.status) { a.status = s.status; a.idleSince = s.status === 'idle' ? t : null; if (s.status === 'waiting') say(a, pick(LINES.wait), t, true); }
+    if (a.status !== s.status) { a.status = s.status; a.idleSince = s.status === 'idle' ? t : null; if (s.status === 'waiting' && !a.arriving) say(a, pick(LINES.wait), t, true); }
     a.leaving = false;
   }
-  for (const a of agents.values()) if (!seen.has(a.id) && !a.leaving) leave(a);
+  for (const a of [...agents.values()]) if (!seen.has(a.id) && !a.leaving) leave(a);
   // номера, если открыто несколько одинаковых
   const count = {};
   for (const a of [...agents.values()].filter(x => !x.leaving)) { count[a.kind] = (count[a.kind] || 0) + 1; a.tagNo = count[a.kind]; }
@@ -573,12 +817,12 @@ function sync(list) {
 function step(dt, t) {
   for (const a of [...agents.values()]) {
     a.ph += dt;
+    if (a.arriving) continue;                          // ещё едет в такси
     breakTick(a, t);
     if (!a.path.length) {
       const want = a.pending || wanted(a, t);
       if (want !== a.place) routeTo(a, want);
-      else if (a.leaving) { agents.delete(a.id); continue; }
-      if (!a.path.length) { a.dir = a.place.face || 'down'; }
+      if (!a.path.length) a.dir = a.place.face || 'down';
     }
     if (a.path.length) {
       const p = a.path[0], dx = p.x - a.x, dy = p.y - a.y, d = Math.hypot(dx, dy), v = 34 * dt;
@@ -591,7 +835,10 @@ function step(dt, t) {
 }
 const arrived = a => !a.path.length && !a.pending;
 const sitting = a => arrived(a) && !!a.place.sit;
+const atCurb = a => a.leaving && arrived(a) && a.place.street;
 function activity(a, t) {
+  if (a.arriving) return 'ride';
+  if (atCurb(a)) return 'cab';
   if (a.leaving || !arrived(a)) return 'walk';
   if (a.brk) return a.brk.spot.act;
   if (a.place.desk) return a.status === 'working' ? 'work' : a.status === 'waiting' ? 'wait' : 'desk';
@@ -600,12 +847,13 @@ function activity(a, t) {
   return a.place.act || 'desk';
 }
 const ACT_UA = { work: 'працює', wait: 'чекає на тебе', desk: 'на місці', walk: 'йде', coffee: "п'є каву", tea: "п'є чай",
-  tv: 'дивиться графіки', music: 'слухає музику', game: 'грає в аркаду', phone: 'в телефоні', sleep: 'дрімає' };
+  tv: 'дивиться графіки', music: 'слухає музику', game: 'грає в аркаду', phone: 'в телефоні', sleep: 'дрімає',
+  ride: 'їде на таксі', cab: 'чекає таксі' };
 
 // ---------- реплики на украинском ----------
 const LINES = {
   hello: ['Привіт!', 'Доброго дня!', 'Я на місці'], helloNight: ['Доброї ночі!', 'Нічна зміна'],
-  bye: ['Бувай!', 'До зустрічі!', 'Па-па!'],
+  bye: ['Бувай!', 'До зустрічі!', 'Па-па!', 'Викликаю таксі'],
   work: ['Пишу код…', 'Ще трохи', 'Майже готово', 'Хм, цікаво', 'Тести зелені!', 'Рефакторю'],
   Bash: ['Запускаю команду', 'Термінал на зв’язку'], Edit: ['Правлю файл', 'Одна правка'], MultiEdit: ['Правлю файл'], Write: ['Створюю файл'],
   Read: ['Читаю код'], Grep: ['Шукаю…'], Glob: ['Шукаю файли'], WebSearch: ['Гуглю…'], WebFetch: ['Читаю сайт'], Task: ['Кличу помічника'], Agent: ['Кличу помічника'],
@@ -613,7 +861,11 @@ const LINES = {
   coffee: ['Кава!', 'Перерва на каву', 'Ще одну каву'], tea: ['Час на чай', 'Чай з лимоном', 'Гарячий чай'],
   tv: ['Графік росте', 'Дивлюсь ринок'], game: ['Ще рівень!', 'Рекорд!', 'Майже пройшов'], music: ['Гарна пісня', 'Відпочиваю'],
   phone: ['Гортаю новини'], sleep: ['Хррр…'], desk: ['Чекаю задачу', 'Що далі?'],
-  winter: ['Сніжно сьогодні', 'Холодно!'], summer: ['Знову дощ', 'Пахне дощем'], autumn: ['Вітер сильний', 'Листопад…'], spring: ['Весна!', 'Квіти цвітуть'],
+  flash: ['Ого, блискавка!', 'Гримить…', 'Ух!'],
+  sky: {
+    clear: ['Гарна погода', 'Тихо сьогодні'], rain: ['Знову дощ', 'Пахне дощем', 'Парасолька є?'], storm: ['Гроза!', 'Ну й злива'],
+    snow: ['Сніжно сьогодні', 'Холодно!', 'Сніг іде'], fog: ['Туман…', 'Нічого не видно'], wind: ['Вітер сильний', 'Ох, задуває'],
+  },
 };
 const MAX_BUBBLES = 2;
 function say(a, s, t, force) {
@@ -626,44 +878,50 @@ function chatTick(a, t) {
   if (a.say || t < a.nextSay || a.leaving || !arrived(a)) return;
   const act = activity(a, t);
   let pool = act === 'work' ? (LINES[a.tool] && Math.random() < 0.6 ? LINES[a.tool] : LINES.work) : LINES[act] || LINES.desk;
-  if ((act === 'desk' || act === 'tv' || act === 'coffee' || act === 'tea') && Math.random() < 0.25) pool = LINES[season];
+  if ((act === 'desk' || act === 'tv' || act === 'coffee' || act === 'tea') && Math.random() < 0.25) pool = LINES.sky[weather];
   say(a, pick(pool), t, false);
 }
 
-// ---------- рисование агента и значков ----------
+// ---------- рисование бота (мелкие пиксели) и значков ----------
 function drawBot(a, t) {
-  const k = KIND[a.kind], x = Math.round(a.x), y = Math.round(a.y), sit = sitting(a), dir = a.dir;
-  const top = y - 11 + (sit ? 2 : 0);
-  const head = k.head, hl = shade(head, 1.15), hd = shade(head, 0.78), body = k.body, bl = shade(body, 1.25), bd = shade(body, 0.75);
-  const walking = a.path.length > 0, act = activity(a, t);
-  const working = act === 'work', waiting = act === 'wait';
-  if (!sit) R(x - 3, y, 7, 1, 'rgba(0,0,0,0.28)');
-  P(x, top, working && (t * 4 | 0) % 2 ? '#ffffff' : k.acc); P(x, top + 1, hd);
-  // голова
-  R(x - 3, top + 2, 7, 5, head); R(x - 3, top + 2, 7, 1, hl); R(x - 3, top + 6, 7, 1, hd);
+  if (a.arriving) return;
+  const k = KIND[a.kind], X = Math.round(a.x * S), Y = Math.round(a.y * S), sit = sitting(a), dir = a.dir;
+  const T = Y - 22 + (sit ? 4 : 0);
+  const head = k.head, hl = shade(head, 1.18), hd = shade(head, 0.78), ol = shade(head, 0.36);
+  const body = k.body, bl = shade(body, 1.3), bd = shade(body, 0.72), obd = shade(body, 0.4);
+  const walking = a.path.length > 0, act = activity(a, t), working = act === 'work', waiting = act === 'wait';
+  if (!sit) Q(X - 7, Y - 1, 15, 2, 'rgba(0,0,0,0.28)');
+  // антенна
+  Q(X, T + 1, 1, 2, ol); Q(X - 1, T - 1, 3, 2, working && (t * 4 | 0) % 2 ? '#ffffff' : k.acc);
+  // голова со скруглёнными углами, светлый верх и тёмный низ
+  Q(X - 7, T + 3, 15, 1, ol); Q(X - 7, T + 13, 15, 1, ol); Q(X - 8, T + 4, 1, 9, ol); Q(X + 8, T + 4, 1, 9, ol);
+  Q(X - 7, T + 4, 15, 9, head); Q(X - 7, T + 4, 15, 1, hl); Q(X - 7, T + 5, 1, 6, hl); Q(X - 7, T + 12, 15, 1, hd); Q(X + 7, T + 5, 1, 7, hd);
+  Q(X - 9, T + 7, 1, 3, ol); Q(X + 9, T + 7, 1, 3, ol);
   const blink = act === 'sleep' || (a.ph % 3.7) < 0.12, eye = waiting ? '#ffcf5c' : k.eye;
-  if (dir === 'down') { R(x - 2, top + 3, 5, 2, '#1D1A33'); if (!blink) { P(x - 1, top + 3, eye); P(x + 1, top + 3, eye); } }
-  else if (dir === 'left') { R(x - 3, top + 3, 3, 2, '#1D1A33'); if (!blink) P(x - 2, top + 3, eye); }
-  else if (dir === 'right') { R(x + 1, top + 3, 3, 2, '#1D1A33'); if (!blink) P(x + 2, top + 3, eye); }
-  else { R(x - 1, top + 4, 3, 1, hd); }
-  // тело и руки
-  R(x - 3, top + 7, 7, 4, body); R(x - 3, top + 7, 7, 1, bl);
-  if (dir === 'down') P(x, top + 8, k.acc);
-  const tap = working ? ((t * 9 + a.ph) | 0) % 2 : 0;
-  const swing = walking ? ((a.ph * 8) | 0) % 2 : 0;
-  if (waiting) { R(x - 4, top + 7, 1, 3, bd); R(x + 4, top + 1 - ((t * 3 | 0) % 2), 1, 5, bd); }
-  else { R(x - 4, top + 7 - tap + swing, 1, 3, bd); R(x + 4, top + 7 - (working ? 1 - tap : 0) + (walking ? 1 - swing : 0), 1, 3, bd); }
-  // кружка в руке
+  const talk = a.say && a.say.until > t && (t * 6 | 0) % 2;
+  const eyeQ = (x) => blink ? Q(x, T + 8, 2, 1, eye) : Q(x, T + 7, 2, 2, eye);
+  if (dir === 'down') { Q(X - 5, T + 6, 11, 5, '#1D1A33'); eyeQ(X - 3); eyeQ(X + 2); if (talk) Q(X - 1, T + 9, 3, 1, eye); }
+  else if (dir === 'left') { Q(X - 7, T + 6, 9, 5, '#1D1A33'); eyeQ(X - 6); eyeQ(X - 2); }
+  else if (dir === 'right') { Q(X - 1, T + 6, 9, 5, '#1D1A33'); eyeQ(X + 1); eyeQ(X + 5); }
+  else { Q(X - 4, T + 7, 9, 4, hd); Q(X - 3, T + 8, 7, 1, shade(head, 0.62)); Q(X - 3, T + 10, 7, 1, shade(head, 0.62)); }
+  // тело, огонёк на груди, руки
+  Q(X - 6, T + 14, 13, 7, obd); Q(X - 5, T + 14, 11, 6, body); Q(X - 5, T + 14, 11, 1, bl); Q(X + 4, T + 15, 1, 5, bd);
+  if (dir === 'down') { Q(X - 2, T + 16, 5, 3, '#1D1A33'); Q(X - 1, T + 17, 3, 1, working && (t * 3 | 0) % 2 ? '#ffffff' : k.acc); }
+  else if (dir !== 'up') Q(X - 1, T + 16, 3, 2, bd);
+  const tap = working ? ((t * 9 + a.ph) | 0) % 2 : 0, swing = walking ? ((a.ph * 8) | 0) % 2 : 0;
+  const armL = waiting ? 0 : -tap + swing, armR = waiting ? -7 - ((t * 3 | 0) % 2) : working ? -(1 - tap) : walking ? 1 - swing : 0;
+  Q(X - 8, T + 15 + armL, 2, 5, bd); Q(X - 8, T + 19 + armL, 2, 1, obd);
+  Q(X + 7, T + 15 + armR, 2, 5, bd); Q(X + 7, T + 19 + armR, 2, 1, obd);
+  // кружка или телефон в руке
   if (act === 'coffee' || act === 'tea') {
-    const cx = dir === 'left' ? x - 6 : x + 5, cy = top + 7 + ((t * 0.5 + a.ph) % 3 < 0.5 ? -2 : 0);
-    R(cx, cy, 2, 2, act === 'coffee' ? '#f7f5ff' : '#ffcf5c'); P(cx + (dir === 'left' ? -1 : 2), cy, '#d8d0f0');
-    if ((t * 3 | 0) % 2) P(cx, cy - 2, 'rgba(255,255,255,0.7)'); else P(cx + 1, cy - 3, 'rgba(255,255,255,0.5)');
+    const left = dir === 'left', cx = left ? X - 13 : X + 10, cy = T + 14 + ((t * 0.5 + a.ph) % 3 < 0.5 ? -4 : 0);
+    Q(cx, cy, 4, 4, act === 'coffee' ? '#f7f5ff' : '#ffcf5c'); Q(cx, cy, 4, 1, act === 'coffee' ? '#6b4a33' : '#c97a2c'); q(left ? cx - 1 : cx + 4, cy + 1, '#d8d0f0');
+    const st = (t * 3 | 0) % 2; q(cx + 1 + st, cy - 2, 'rgba(255,255,255,0.7)'); q(cx + 2 - st, cy - 4, 'rgba(255,255,255,0.45)');
   }
-  if (act === 'phone') { R(x + 4, top + 7, 2, 3, '#1D1A33'); P(x + 4, top + 8, (t * 2 | 0) % 2 ? '#5cc8ff' : '#7fe0b4'); }
+  if (act === 'phone' || act === 'cab') { Q(X + 8, T + 13, 4, 6, '#1D1A33'); Q(X + 9, T + 14, 2, 3, (t * 2 | 0) % 2 ? '#5cc8ff' : '#7fe0b4'); }
   if (!sit) {
     const f = walking ? ((a.ph * 8) | 0) % 2 : 2;
-    if (f !== 0) R(x - 2, top + 11, 2, 1, '#2a2540');
-    if (f !== 1) R(x + 1, top + 11, 2, 1, '#2a2540');
+    Q(X - 4, T + 20 + (f === 0 ? 0 : 1), 3, 2, '#2a2540'); Q(X + 2, T + 20 + (f === 1 ? 0 : 1), 3, 2, '#2a2540');
   }
 }
 
@@ -677,41 +935,51 @@ const ICON = {
   chart:  ['......#', '.....#.', '.#.##..', '#.#....', '#######'],
   note:   ['...###.', '...#.#.', '...#.#.', '.###.#.', '.##.##.'],
   phone:  ['.###...', '.#.#...', '.###...', '.###...', '.###...'],
+  car:    ['.###...', '#####..', '#####..', '.#.#...', '.......'],
 };
-const ICON_COL = { term: '#1D1A33', pencil: '#cf6f47', lens: '#4A37C9', cup: '#8a5f3f', pad: '#ff5aa0', chart: '#137A4F', note: '#4A37C9', phone: '#1D1A33' };
+const ICON_COL = { term: '#1D1A33', pencil: '#cf6f47', lens: '#4A37C9', cup: '#8a5f3f', pad: '#ff5aa0', chart: '#137A4F', note: '#4A37C9', phone: '#1D1A33', car: '#c99a1a' };
 const TOOL_ICON = { Bash: 'term', Edit: 'pencil', MultiEdit: 'pencil', Write: 'pencil', NotebookEdit: 'pencil', Read: 'lens', Grep: 'lens', Glob: 'lens', WebSearch: 'lens', WebFetch: 'lens' };
 function chip(name, bx, by) {
-  R(bx, by, 9, 7, '#f7f5ff'); P(bx, by + 7, '#f7f5ff'); P(bx + 1, by + 7, '#f7f5ff');
+  const X = Math.round(bx * S), Y = Math.round(by * S);
+  Q(X - 1, Y - 1, 20, 16, '#1D1A33'); Q(X, Y, 18, 14, '#f7f5ff'); Q(X, Y + 14, 4, 2, '#f7f5ff'); Q(X - 1, Y + 14, 1, 3, '#1D1A33'); Q(X + 4, Y + 14, 1, 2, '#1D1A33'); q(X, Y + 16, '#1D1A33');
   const rows = ICON[name], col = ICON_COL[name];
-  for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 7; xx++) if (rows[yy][xx] === '#') P(bx + 1 + xx, by + 1 + yy, col);
+  for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 7; xx++) if (rows[yy][xx] === '#') Q(X + 2 + xx * 2, Y + 2 + yy * 2, 2, 2, col);
+}
+// табличка с именем: тёмная коробка в неоновой рамке цвета агента
+function neonTag(name, cx, y, col) {
+  const tw = textW(name) * 2, X = Math.round(cx * S - tw / 2), Y = Math.round(y * S);
+  Q(X - 4, Y - 3, tw + 8, 16, '#0e0b1c'); Q(X - 3, Y - 2, tw + 6, 14, col); Q(X - 2, Y - 1, tw + 4, 12, '#17142c');
+  textQ(name, X, Y + 1, 2, col);
 }
 function drawLabel(a, t) {
-  const k = KIND[a.kind], x = Math.round(a.x), y = Math.round(a.y), top = y - 11 + (sitting(a) ? 2 : 0);
+  if (a.arriving) return;
+  const k = KIND[a.kind], x = a.x, top = (Math.round(a.y * S) - 22 + (sitting(a) ? 4 : 0)) / S;
   const name = k.short + (a.tagNo > 1 ? a.tagNo : '');
   const sofa = arrived(a) && a.place.sit && !a.place.desk && a.place.lane === 82;
-  const ly = top - 8 - (sofa && CHILL.indexOf(a.place) % 2 ? 6 : 0);
+  const ly = top - 9 - (sofa && CHILL.indexOf(a.place) % 2 ? 7 : 0);
   a.labelY = ly;
-  tag(name, x - textW(name) / 2, ly, k.head);
+  neonTag(name, x, ly, k.head);
   if (!arrived(a)) return;
-  const bx = x + 5, by = top - 2, act = activity(a, t);
+  const bx = x + 6, by = top + 1, act = activity(a, t);
   if (act === 'wait') {
-    if ((t * 2 | 0) % 2) { R(bx, by, 7, 8, '#ffcf5c'); R(bx + 1, by - 1, 5, 10, '#ffcf5c'); R(bx + 3, by + 1, 1, 4, '#1D1A33'); P(bx + 3, by + 6, '#1D1A33'); }
+    if ((t * 2 | 0) % 2) { const X = Math.round(bx * S), Y = Math.round(by * S); Q(X, Y - 2, 12, 18, '#1D1A33'); Q(X + 1, Y - 1, 10, 16, '#ffcf5c'); Q(X + 5, Y + 1, 2, 8, '#1D1A33'); Q(X + 5, Y + 11, 2, 2, '#1D1A33'); }
   } else if (act === 'work') {
     const ic = TOOL_ICON[a.tool];
     if (ic) chip(ic, bx, by);
     else {
-      R(bx, by, 10, 6, '#f7f5ff'); P(bx, by + 6, '#f7f5ff'); P(bx + 1, by + 6, '#f7f5ff');
-      const n = (t * 3 | 0) % 4;
-      for (let i = 0; i < n; i++) P(bx + 2 + i * 2, by + 3, '#1D1A33');
+      const X = Math.round(bx * S), Y = Math.round(by * S), n = (t * 3 | 0) % 4;
+      Q(X - 1, Y - 1, 20, 14, '#1D1A33'); Q(X, Y, 18, 12, '#f7f5ff'); Q(X, Y + 12, 4, 2, '#f7f5ff');
+      for (let i = 0; i < n; i++) Q(X + 3 + i * 4, Y + 5, 2, 2, '#1D1A33');
     }
   } else if (act === 'sleep') {
     const c = (t * 0.7 + a.ph) % 3;
-    if (c < 2) text('Z', bx + c, by - c * 2, `rgba(240,236,255,${(1 - c / 2).toFixed(2)})`);
+    if (c < 2) textQ('Z', Math.round((bx + c) * S), Math.round((by - c * 2) * S), 2, `rgba(240,236,255,${(1 - c / 2).toFixed(2)})`);
   } else if (act === 'coffee' || act === 'tea') chip('cup', bx, by - ((t * 2 | 0) % 2));
   else if (act === 'game') chip('pad', bx, by - ((t * 4 | 0) % 2));
   else if (act === 'tv') chip('chart', bx, by);
   else if (act === 'music') chip('note', bx, by - ((t * 2 | 0) % 2));
   else if (act === 'phone') chip('phone', bx, by);
+  else if (act === 'cab') chip('car', bx, by - ((t * 2 | 0) % 2));
 }
 
 // ---------- столы и лампы ----------
@@ -725,46 +993,69 @@ function lampStep(dt, t) {
   }
 }
 const lampLit = (d, t) => d.lamp && !(t - d.lampAt < 0.45 && (t * 16 | 0) % 3 === 0);   // при включении лампа пару раз моргает
+const CODE_COLS = ['#8ff7ff', '#f7f5ff', '#ffcf5c', '#ff9ab8', '#b9a8ff', '#7fe0b4'];
 function drawDesk(d, t) {
-  const { x0, y0, cx } = d, o = d.owner, here = o && arrived(o) && o.place === d;
-  // стол: столешница, передняя грань, тумба с ящиками
-  R(x0 + 1, y0 + 14, 24, 2, 'rgba(0,0,0,0.2)');
-  furn(x0, y0, 24, 10, 3, '#cf9563');
-  shell(x0 + 17, y0 + 10, 6, 4, '#a49cc4'); R(x0 + 19, y0 + 11, 2, 1, '#e8e4f8'); R(x0 + 19, y0 + 13, 2, 1, '#e8e4f8');
+  const X = d.x0 * S, Y = d.y0 * S, CX = d.cx * S, o = d.owner, here = o && arrived(o) && o.place === d;
+  // стол: столешница с волокнами, передняя грань, тумба с ящиками
+  Q(X + 2, Y + 26, 48, 4, 'rgba(0,0,0,0.18)');
+  Q(X - 1, Y - 1, 50, 28, '#4a2e1a'); Q(X, Y, 48, 20, '#d39a66'); Q(X, Y, 48, 1, '#eab98a');
+  for (let k = 0; k < 4; k++) Q(X + 3 + k * 11, Y + 4 + (k % 3) * 5, 6, 1, '#c48a57');
+  Q(X, Y + 20, 48, 6, '#a8703f'); Q(X, Y + 20, 48, 1, '#8a5a32');
+  Q(X + 33, Y + 19, 14, 12, '#2e2a40'); Q(X + 34, Y + 20, 12, 10, '#a49cc4'); Q(X + 34, Y + 24, 12, 1, '#7f77a3'); Q(X + 38, Y + 22, 4, 1, '#e8e4f8'); Q(X + 38, Y + 27, 4, 1, '#e8e4f8');
   // монитор на ножке
-  R(cx - 2, y0 + 3, 5, 1, '#2d2a40'); R(cx, y0 + 1, 1, 2, '#2d2a40');
-  R(x0 + 4, y0 - 8, 16, 10, '#0d0b18'); R(x0 + 5, y0 - 7, 14, 8, '#1D1A33');
-  const sx = x0 + 6, sy = y0 - 6, sw = 12, sh = 6;
+  Q(CX - 6, Y + 6, 13, 2, '#2d2a40'); Q(CX - 1, Y + 3, 3, 3, '#3a3650');
+  Q(X + 8, Y - 16, 32, 20, '#08070f'); Q(X + 9, Y - 15, 30, 18, '#1f1c30'); Q(X + 9, Y - 15, 30, 1, '#3a3656');
+  const sx = X + 11, sy = Y - 13, sw = 26, sh = 13;
   if (here && o.status === 'working') {
-    R(sx, sy, sw, sh, '#0e1630');
-    const rr = rng((t * 3 | 0) * 13 + cx);
-    for (let i = 0; i < 3; i++) R(sx + 1 + (i === 1 ? 2 : 0), sy + 1 + i * 2, 2 + (rr() * 8 | 0), 1, [KIND[o.kind].head, '#8ff7ff', '#f7f5ff'][i]);
+    // бегущий код с подсветкой
+    Q(sx, sy, sw, sh, '#0e1630');
+    const scroll = t * 1.5 | 0;
+    for (let i = 0; i < 6; i++) {
+      const rr = rng((scroll + i) * 7919 + d.cx);
+      let x = sx + 1 + (rr() * 3 | 0) * 2;
+      const parts = 1 + (rr() * 3 | 0);
+      for (let p = 0; p < parts && x < sx + sw - 2; p++) {
+        const len = Math.min(2 + (rr() * 6 | 0), sx + sw - 1 - x);
+        Q(x, sy + 1 + i * 2, len, 1, p === 0 ? KIND[o.kind].head : CODE_COLS[rr() * CODE_COLS.length | 0]); x += len + 1;
+      }
+    }
+    if ((t * 2 | 0) % 2) Q(sx + 2, sy + sh - 1, 3, 1, '#f7f5ff');
   } else if (here && o.status === 'waiting') {
-    R(sx, sy, sw, sh, (t * 2 | 0) % 2 ? '#ffcf5c' : '#5c4a1f'); R(sx + 5, sy + 1, 2, 2, '#1D1A33'); R(sx + 5, sy + 4, 2, 1, '#1D1A33');
+    Q(sx, sy, sw, sh, (t * 2 | 0) % 2 ? '#ffcf5c' : '#5c4a1f'); Q(sx + 12, sy + 2, 2, 6, '#1D1A33'); Q(sx + 12, sy + 10, 2, 2, '#1D1A33');
   } else if (here || (o && o.brk)) {
     // на месте или ушёл за кофе: на экране график
-    R(sx, sy, sw, sh, '#0e1630');
-    for (let i = 0; i < 11; i++) P(sx + i, sy + 4 - Math.round(1.5 + Math.sin(i * 0.9 + (cx % 5)) * 1.4 + i * 0.1), i > 7 ? '#7fe0b4' : '#5cc8ff');
+    Q(sx, sy, sw, sh, '#0e1630');
+    for (let i = 0; i < sw; i += 3) { const h = 2 + ((i * 7 + d.cx) % 5); Q(sx + i, sy + sh - h, 2, h, '#1f3266'); }
+    for (let i = 0; i < sw; i++) {
+      const v = Math.round(sh / 2 + Math.sin(i * 0.45 + d.cx) * 3 + Math.sin(i * 0.17 + d.cx * 2) * 1.5 - i * 0.12);
+      q(sx + i, sy + Math.max(1, Math.min(sh - 2, v)), i > sw * 0.7 ? '#7fe0b4' : '#5cc8ff');
+    }
   } else {
-    R(sx, sy, sw, sh, '#15131f'); for (let i = 0; i < 4; i++) P(sx + 7 + i, sy + 3 - i, '#25223a'); P(sx + 11, sy + 5, '#5cc8ff');
+    Q(sx, sy, sw, sh, '#15131f'); for (let i = 0; i < 6; i++) { q(sx + 14 + i, sy + 9 - i, '#25223a'); q(sx + 16 + i, sy + 9 - i, '#25223a'); }
   }
-  P(x0 + 18, y0 - 7, '#ffcf5c');                     // стикер на рамке
-  // клавиатура, мышь, кружка, бумаги или растение
-  R(cx - 6, y0 + 4, 11, 4, '#5e5878'); R(cx - 5, y0 + 4, 9, 3, '#f1eefb'); for (let i = 0; i < 4; i++) P(cx - 4 + i * 2, y0 + 5, '#b9b2d6');
-  R(cx + 7, y0 + 5, 2, 3, '#f1eefb'); P(cx + 7, y0 + 5, '#b9b2d6');
-  R(x0 + 1, y0 + 5, 3, 3, ['#f7f5ff', '#ffcf5c', '#ff9ab8', '#7fe0b4'][(x0 / 28 | 0) % 4]); P(x0 + 2, y0 + 5, '#6b4a33'); P(x0 + 4, y0 + 6, '#d8d0f0');
-  if ((x0 + y0) % 3 === 0) { R(x0 + 19, y0 + 1, 4, 5, '#f7f5ff'); R(x0 + 20, y0 + 2, 2, 1, '#b9b2d6'); R(x0 + 20, y0 + 4, 2, 1, '#b9b2d6'); }
-  else { R(x0 + 19, y0 + 4, 4, 3, '#f3eefb'); R(x0 + 19, y0 + 6, 4, 1, '#c9c1e6'); P(x0 + 19, y0 + 2, '#3d8a4c'); P(x0 + 22, y0 + 2, '#58b86a'); P(x0 + 20, y0 + 1, '#2f8a4a'); P(x0 + 21, y0 + 3, '#58b86a'); P(x0 + 21, y0, '#5cbf6c'); }
+  Q(X + 35, Y - 15, 4, 4, '#ffcf5c'); q(X + 22, Y + 2, here ? '#7fe0b4' : '#5cc8ff');   // стикер и огонёк питания
+  // клавиатура, мышь, кружка, растение или бумаги
+  Q(CX - 12, Y + 9, 22, 7, '#4a4560'); Q(CX - 11, Y + 10, 20, 5, '#e9e5f6');
+  for (let rr = 0; rr < 2; rr++) for (let c = 0; c < 9; c++) q(CX - 10 + c * 2, Y + 11 + rr * 2, '#aaa3c8');
+  Q(CX - 5, Y + 14, 10, 1, '#c9c3e0');
+  Q(CX + 13, Y + 10, 5, 7, '#4a4560'); Q(CX + 14, Y + 11, 3, 5, '#f1eefb'); q(CX + 15, Y + 11, '#aaa3c8');
+  const mug = ['#f7f5ff', '#ffcf5c', '#ff9ab8', '#7fe0b4'][(d.x0 / 28 | 0) % 4];
+  Q(X + 2, Y + 10, 7, 7, shade(mug, 0.55)); Q(X + 3, Y + 11, 5, 5, mug); Q(X + 3, Y + 11, 5, 1, '#6b4a33'); q(X + 9, Y + 13, shade(mug, 0.7));
+  if ((d.x0 + d.y0) % 3 === 0) { Q(X + 40, Y + 3, 7, 9, '#c9c1e6'); Q(X + 41, Y + 3, 6, 8, '#f7f5ff'); Q(X + 42, Y + 5, 4, 1, '#b9b2d6'); Q(X + 42, Y + 7, 3, 1, '#b9b2d6'); Q(X + 42, Y + 9, 4, 1, '#b9b2d6'); }
+  else potQ(X + 43, Y + 13, '#f3eefb', (d.x0 / 28 | 0) % 2 ? '#ff9ab8' : null);
   // настольная лампа
   const lit = lampLit(d, t);
-  R(x0 + 1, y0 + 3, 3, 1, '#2d2a40'); R(x0 + 2, y0, 1, 3, '#2d2a40'); R(x0 + 1, y0 - 2, 4, 2, lit ? '#ffe7a3' : '#4a4560'); P(x0 + 4, y0 - 2, lit ? '#fff6d8' : '#5e5878');
-  // сиденье офисного кресла и колёсики
-  disc(cx, y0 + 18, 4, '#232030', 0.7); disc(cx, y0 + 17, 3, '#353048', 0.6);
+  Q(X + 2, Y + 6, 6, 2, '#2d2a40'); lineQ(X + 5, Y + 5, X + 4, Y, '#2d2a40');
+  Q(X + 1, Y - 4, 7, 4, lit ? '#ffe7a3' : '#4a4560'); Q(X + 1, Y - 4, 7, 1, lit ? '#fff6d8' : '#5e5878'); Q(X + 2, Y, 5, 1, lit ? '#fff6d8' : '#3a3650');
+  // сиденье кресла
+  discQ(CX, Y + 36, 8, '#141220', 0.7); discQ(CX, Y + 35, 7, '#2b2740', 0.6); Q(CX - 4, Y + 32, 8, 1, '#3e3958');
 }
 function drawChairBack(d) {
-  const { cx, y0 } = d;
-  R(cx - 5, y0 + 20, 11, 4, '#141220'); R(cx - 4, y0 + 21, 9, 2, '#2e2a40'); R(cx - 4, y0 + 21, 9, 1, '#4a4466');
-  R(cx, y0 + 24, 1, 1, '#141220'); P(cx - 3, y0 + 25, '#141220'); P(cx + 3, y0 + 25, '#141220'); P(cx, y0 + 26, '#141220');
+  const CX = d.cx * S, Y = d.y0 * S;
+  Q(CX - 10, Y + 40, 21, 9, '#0f0d18'); Q(CX - 9, Y + 41, 19, 7, '#2e2a40'); Q(CX - 9, Y + 41, 19, 1, '#4a4466'); Q(CX - 9, Y + 47, 19, 1, '#221f30');
+  for (let i = -6; i <= 6; i += 6) q(CX + i, Y + 44, '#3e3958');
+  Q(CX - 1, Y + 49, 3, 3, '#0f0d18'); Q(CX - 7, Y + 51, 15, 1, '#0f0d18');
+  Q(CX - 8, Y + 52, 2, 2, '#0f0d18'); Q(CX + 7, Y + 52, 2, 2, '#0f0d18'); Q(CX - 1, Y + 53, 3, 2, '#0f0d18');
 }
 function glow(x, y, rx, ry, rgb, a) {
   const gr = g.createRadialGradient(x, y, 0, x, y, rx);
@@ -775,139 +1066,243 @@ function glow(x, y, rx, ry, rgb, a) {
 function drawLampLight(t) {
   g.globalCompositeOperation = 'lighter';
   const k = phase === 'night' ? 0.42 : phase === 'dusk' ? 0.26 : 0.12;
-  for (const d of DESKS) if (lampLit(d, t)) { glow(d.x0 + 6, d.y0 + 3, 15, 9, '255,205,130', k); glow(d.x0 + 3, d.y0 - 1, 4, 3, '255,240,200', k); }
-  // уютный свет: торшер, лампа на полке, бра, аркада, телевизор, включённые мониторы
+  for (const d of DESKS) if (lampLit(d, t)) { glow(d.x0 + 6, d.y0 + 3, 15, 9, '255,205,130', k); glow(d.x0 + 2.5, d.y0 - 1, 4, 3, '255,240,200', k); }
+  // уютный свет: торшер, лампа на полке, бра, аркада, телевизор, лампы под вывеской, включённые мониторы
   const amb = phase === 'night' ? 0.4 : phase === 'dusk' ? 0.28 : 0.14;
-  glow(82, 92, 18, 12, '255,210,140', amb); glow(112, 123, 10, 7, '255,210,140', amb * 0.8); glow(78, 61, 8, 10, '255,220,160', amb * 0.7);
-  glow(86, 121, 11, 7, '255,90,160', amb * 0.7); glow(115, 38, 22, 10, '90,150,255', amb * 0.45);
-  for (const d of DESKS) if (d.owner && arrived(d.owner) && d.owner.place === d) glow(d.cx, d.y0 - 2, 11, 7, '120,180,255', amb * 0.45);
+  glow(82, 91, 18, 12, '255,210,140', amb); glow(112, 120, 10, 7, '255,210,140', amb * 0.8); glow(78, 59, 8, 10, '255,220,160', amb * 0.7);
+  glow(86, 121, 11, 7, '255,90,160', amb * 0.7); glow(115, 34, 22, 10, '90,150,255', amb * 0.45);
+  for (const x of SPOTS) glow(x / S, 28, 7, 10, '255,230,170', amb * 0.6);
+  for (const d of DESKS) if (d.owner && arrived(d.owner) && d.owner.place === d) glow(d.cx, d.y0 - 4, 12, 7, '120,180,255', amb * 0.45);
   g.globalCompositeOperation = 'source-over';
 }
 function drawStreetLights(t) {
   if (phase === 'day') return;
-  const f = flicker(t);
+  const f = flicker(t), wet = isWet();
   g.globalCompositeOperation = 'lighter';
+  cur = g;
   LAMPS.forEach((lx, i) => {
     const fi = i === 2 ? f * f : f;                  // один фонарь мерцает сильнее
-    glow(lx, 170, 18, 9, '255,220,150', (0.22 * fi).toFixed(3));
-    g.fillStyle = `rgba(255,236,170,${(0.9 * fi).toFixed(2)})`; g.fillRect(lx - 1, 161, 3, 1);
-    if (wetSeason()) glow(lx, 192, 4, 10, '255,220,150', (0.12 * fi).toFixed(3));      // отражение на мокрой дороге
+    glow(lx, 166, 20, 11, '255,220,150', (0.24 * fi).toFixed(3));
+    glow(lx, 155, 6, 6, '255,230,170', (0.35 * fi).toFixed(3));
+    Q(lx * S - 3, 306, 7, 9, `rgba(255,226,150,${(0.85 * fi).toFixed(2)})`);
+    if (wet) { glow(lx, 194, 4, 12, '255,220,150', (0.14 * fi).toFixed(3)); }   // отражение на мокрой дороге
   });
   glow(192, 166, 10, 4, '255,220,150', 0.18);
+  // гирлянда на изгороди мерцает
+  for (let i = 0; i < FAIRY.length; i++) {
+    const [x, y] = FAIRY[i], a = 0.55 + 0.45 * Math.sin(t * 2.2 + i * 1.7);
+    Q(x, y, 1, 1, `rgba(255,214,140,${a.toFixed(2)})`);
+    if (a > 0.93) glow(x / S, y / S, 2, 2, '255,200,120', 0.18);
+  }
+  if (wet) for (const [lx, c] of [[147, '255,90,160'], [237, '92,200,255']]) glow(lx, 200, 3, 12, c, 0.12);   // неон вывески в лужах
+  g.globalCompositeOperation = 'source-over';
+}
+
+// светлячки над травой тёплыми ночами
+const FLIES = Array.from({ length: 26 }, (_, i) => {
+  const r = rng(500 + i); let x, y;
+  do { x = r() * W; y = r() * 160; } while (x > 64 && x < 320 && y > 12);
+  return { x, y, ph: r() * 6.28, sp: 0.5 + r() };
+});
+function drawFireflies(t) {
+  if (phase === 'day' || season === 'winter' || isWet() || weather === 'snow') return;
+  g.globalCompositeOperation = 'lighter';
+  for (const f of FLIES) {
+    const a = Math.max(0, Math.sin(t * f.sp * 1.6 + f.ph)); if (a < 0.1) continue;
+    const x = f.x + Math.sin(t * 0.4 * f.sp + f.ph) * 6, y = f.y + Math.cos(t * 0.5 * f.sp + f.ph) * 3;
+    glow(x, y, 3, 3, '210,255,140', 0.3 * a);
+    g.fillStyle = `rgba(230,255,170,${(0.9 * a).toFixed(2)})`; g.fillRect(Math.round(x * S) / S, Math.round(y * S) / S, 1 / S, 1 / S);
+  }
   g.globalCompositeOperation = 'source-over';
 }
 
 // ---------- ёлка зимой ----------
 function drawXmasTree(t) {
-  const cx = 146, by = 140;
-  R(cx - 1, by - 2, 3, 3, '#6b4a33');
-  for (let i = 0; i < 16; i++) { const w = 1 + Math.floor(i * 0.45); R(cx - w, by - 3 - (15 - i), w * 2 + 1, 1, i % 4 === 3 ? '#2f6e3d' : '#3d8a4c'); }
-  P(cx, by - 19, '#ffcf5c'); P(cx - 1, by - 18, '#ffcf5c'); P(cx + 1, by - 18, '#ffcf5c');
+  const cx = 292, by = 280;
+  Q(cx - 3, by - 6, 7, 6, '#6b4a33'); Q(cx - 6, by - 3, 13, 5, '#b5643c'); Q(cx - 6, by - 3, 13, 1, '#d07a4a');
+  for (let i = 0; i < 32; i++) { const w = 1 + Math.floor(i * 0.42), y = by - 6 - (32 - i); Q(cx - w, y, w * 2 + 1, 1, i % 8 >= 6 ? '#2f6e3d' : '#3d8a4c'); q(cx - w, y, '#2a5e35'); if (i % 8 === 2) q(cx - w + 2, y, '#58a865'); }
+  Q(cx - 1, by - 40, 3, 3, '#ffcf5c'); q(cx, by - 41, '#fff3c4');
   const cols = ['#ff5c5c', '#5cc8ff', '#ffcf5c', '#ff9ab8'];
-  [[0, -15], [-2, -12], [2, -10], [-3, -7], [3, -6], [0, -9], [-4, -4], [4, -4], [1, -5]].forEach(([dx, dy], i) => P(cx + dx, by + dy, cols[(i + (t * 2 | 0)) % 4]));
+  [[0, -32], [-3, -28], [3, -25], [-5, -21], [5, -19], [0, -23], [-8, -14], [8, -14], [2, -16], [-2, -11], [6, -10], [-10, -9]].forEach(([dx, dy], i) => Q(cx + dx, by + dy, 2, 2, cols[(i + (t * 2 | 0)) % 4]));
 }
 
-// ---------- машины ----------
+// ---------- машины и такси ----------
 const cars = [];
-let nextCar = 1;
-const CAR_COLORS = ['#e0745f', '#5cc8ff', '#ffd35c', '#f7f5ff', '#7b61ff', '#2fd3a0', '#2d2a40'];
+let nextCar = 1, taxi = null;
+const CAR_COLORS = ['#e0745f', '#5cc8ff', '#f7f5ff', '#7b61ff', '#2fd3a0', '#4a4560', '#ff9ab8'];
+const TAXI_STOP = 192;
+// такси нужно, если кто-то едет в офис или ждёт у бордюра
+const taxiNeeded = () => [...agents.values()].some(a => a.arriving || atCurb(a));
+function taxiStep(dt, t) {
+  if (!taxi) {
+    if (taxiNeeded()) { taxi = { taxi: true, x: -30, dir: 1, y: 192, v: 70, col: '#ffc83a', state: 'come', at: 0 }; cars.push(taxi); }
+    return;
+  }
+  if (taxi.state === 'come') {
+    const d = TAXI_STOP - taxi.x;
+    taxi.v = Math.max(5, Math.min(70, d * 1.6));
+    if (d <= 0.3) { taxi.x = TAXI_STOP; taxi.v = 0; taxi.state = 'stop'; taxi.at = t; }
+  } else if (taxi.state === 'stop') {
+    // выпускаем приехавших по одному, сажаем тех, кто ждёт у бордюра
+    const s2 = t - taxi.at, all = [...agents.values()];
+    let n = 0;
+    if (s2 > 0.8) for (const a of all) {
+      if (a.arriving) {
+        if (!a.exitAt) a.exitAt = t + 0.7 * n++;
+        if (t >= a.exitAt) { a.arriving = false; a.x = 192; a.y = 181; a.nextSay = Math.max(a.nextSay, t + 3); taxi.busy = t; }
+      } else if (atCurb(a)) { agents.delete(a.id); taxi.busy = t; }
+    }
+    taxi.door = s2 > 0.35 && t - (taxi.busy || taxi.at + 0.8) < 1.4;
+    // ждём ещё немного, если кто-то уже идёт к выходу
+    const waiting = all.some(a => a.arriving || atCurb(a)), coming = all.some(a => a.leaving && !atCurb(a));
+    if (s2 > 2.6 && !waiting && t - (taxi.busy || 0) > 1.4 && !(coming && s2 < 8)) taxi.state = 'go';
+  } else {
+    taxi.door = false; taxi.v = Math.min(80, taxi.v + 45 * dt);
+  }
+}
 function carStep(dt, t) {
   if (t > nextCar) {
-    const dir = Math.random() < 0.5 ? 1 : -1;
-    cars.push({ x: dir > 0 ? -30 : W + 30, dir, y: dir > 0 ? 192 : 208, col: CAR_COLORS[Math.random() * CAR_COLORS.length | 0], v: 45 + Math.random() * 30 });
+    const dir = Math.random() < 0.5 ? 1 : -1, x = dir > 0 ? -30 : W + 30, y = dir > 0 ? 192 : 208;
+    if (!cars.some(c => c.y === y && Math.abs(c.x - x) < 50)) cars.push({ x, dir, y, col: pick(CAR_COLORS), v: 45 + Math.random() * 30 });
     nextCar = t + 4 + Math.random() * 9;
   }
-  for (const c of cars) c.x += c.dir * c.v * dt;
-  for (let i = cars.length - 1; i >= 0; i--) if (cars[i].x < -40 || cars[i].x > W + 40) cars.splice(i, 1);
+  taxiStep(dt, t);
+  // машины в одном ряду не наезжают друг на друга и ждут за стоящим такси
+  for (const c of cars) {
+    let v = c.v;
+    for (const o of cars) if (o !== c && o.y === c.y) { const gap = (o.x - c.x) * c.dir; if (gap > 0 && gap < 32) v = Math.min(v, gap < 28 ? 0 : o.v); }
+    c.cur = v; c.x += c.dir * v * dt;
+  }
+  for (let i = cars.length - 1; i >= 0; i--) if (cars[i].x < -40 || cars[i].x > W + 40) { if (cars[i] === taxi) taxi = null; cars.splice(i, 1); }
 }
-function drawCar(c) {
-  const x = Math.round(c.x) - 11, y = c.y - 5, f = c.dir > 0;
-  R(x + 1, y + 10, 22, 1, 'rgba(0,0,0,0.3)');
-  if (wetSeason()) R(x + 1, y + 11, 20, 2, 'rgba(255,255,255,0.08)');
-  R(x, y, 22, 10, shade(c.col, 0.8)); R(x + 1, y + 1, 20, 8, c.col);
-  if (season === 'winter') R(x + 7, y + 2, 6, 6, '#f4f7fd');
-  R(f ? x + 13 : x + 4, y + 2, 5, 6, '#9cc8ff'); R(f ? x + 4 : x + 15, y + 2, 3, 6, '#6f8fb8');
-  if (season !== 'winter') R(f ? x + 7 : x + 8, y + 2, 6, 6, shade(c.col, 0.9));
-  R(f ? x + 21 : x, y + 1, 1, 2, '#fff3c4'); R(f ? x + 21 : x, y + 7, 1, 2, '#fff3c4');
-  R(f ? x : x + 21, y + 1, 1, 2, '#ff5c5c'); R(f ? x : x + 21, y + 7, 1, 2, '#ff5c5c');
-  if (phase !== 'day') { cur.fillStyle = 'rgba(255,243,196,0.16)'; for (let i = 0; i < 26; i++) cur.fillRect(f ? x + 22 + i : x - 1 - i, y + 1 - i / 6, 1, 8 + i / 3); }
+function drawCar(c, t) {
+  const X = Math.round(c.x * S) - 22, Y = c.y * S - 10, f = c.dir > 0, col = c.col, night = phase !== 'day';
+  Q(X + 2, Y + 20, 42, 2, 'rgba(0,0,0,0.3)');
+  if (isWet()) Q(X + 2, Y + 22, 40, 4, 'rgba(255,255,255,0.06)');
+  for (const wx of [X + 6, X + 31]) { Q(wx, Y - 1, 7, 2, '#141220'); Q(wx, Y + 19, 7, 2, '#141220'); }
+  // кузов, капот, крыша и стёкла
+  Q(X, Y, 44, 20, shade(col, 0.5)); Q(X + 1, Y + 1, 42, 18, col); Q(X + 1, Y + 1, 42, 2, shade(col, 1.15)); Q(X + 1, Y + 17, 42, 2, shade(col, 0.78));
+  const wind = f ? X + 27 : X + 10, rear = f ? X + 9 : X + 29, roof = f ? X + 15 : X + 18;
+  Q(wind, Y + 3, 7, 14, '#9cc8ff'); Q(wind + (f ? 1 : 4), Y + 4, 2, 12, '#cfe6ff');
+  Q(rear, Y + 4, 6, 12, '#6f8fb8');
+  Q(roof, Y + 3, 11, 14, shade(col, 0.9)); Q(roof, Y + 3, 11, 1, shade(col, 1.1));
+  q(f ? X + 28 : X + 15, Y - 1, shade(col, 0.55)); q(f ? X + 28 : X + 15, Y + 20, shade(col, 0.55));
+  if (season === 'winter') Q(roof + 1, Y + 4, 9, 12, '#f4f7fd');
+  if (c.taxi) {
+    for (let i = 0; i < 9; i++) { Q(X + 4 + i * 4, Y + 2, 2, 2, '#1D1A33'); Q(X + 6 + i * 4, Y + 16, 2, 2, '#1D1A33'); }
+    Q(roof + 2, Y + 6, 7, 8, '#1D1A33'); Q(roof + 3, Y + 7, 5, 6, night ? '#ffe27a' : '#fff6d0'); Q(roof + 3, Y + 9, 5, 1, '#1D1A33');
+    if (c.door) { Q(X + 18, Y - 7, 9, 7, shade(col, 0.5)); Q(X + 19, Y - 6, 7, 6, col); Q(X + 19, Y - 6, 7, 1, shade(col, 1.15)); Q(X + 20, Y - 4, 5, 2, '#9cc8ff'); }
+    if (c.state === 'stop' && (t * 2.5 | 0) % 2) { Q(X, Y, 2, 2, '#ffb030'); Q(X + 42, Y, 2, 2, '#ffb030'); Q(X, Y + 18, 2, 2, '#ffb030'); Q(X + 42, Y + 18, 2, 2, '#ffb030'); }
+  }
+  const hx = f ? X + 42 : X, tx = f ? X : X + 42, brake = c.taxi && c.state === 'come' && c.v < 40;
+  Q(hx, Y + 2, 2, 4, '#fff3c4'); Q(hx, Y + 14, 2, 4, '#fff3c4');
+  Q(tx, Y + 2, 2, 3, brake ? '#ff2a2a' : '#c43c3c'); Q(tx, Y + 15, 2, 3, brake ? '#ff2a2a' : '#c43c3c');
+  if (night) {
+    // фары: мягкий конус света, гаснет к концу
+    const hx0 = (f ? X + 44 : X) / S, dx = f ? 1 : -1, gr = g.createLinearGradient(hx0, 0, hx0 + dx * 30, 0);
+    gr.addColorStop(0, 'rgba(255,240,190,0.3)'); gr.addColorStop(1, 'rgba(255,240,190,0)');
+    g.save(); g.globalCompositeOperation = 'lighter'; g.fillStyle = gr;
+    g.beginPath(); g.moveTo(hx0, c.y - 4); g.lineTo(hx0 + dx * 30, c.y - 9); g.lineTo(hx0 + dx * 30, c.y + 9); g.lineTo(hx0, c.y + 4); g.closePath(); g.fill(); g.restore();
+    if (brake) glow(tx / S, c.y, 6, 5, '255,60,60', 0.3);
+  }
 }
 
 // ---------- кадр ----------
 function frame(t, dt) {
   windNow(t);
   step(dt, t); carStep(dt, t); lampStep(dt, t); windStep(dt); weatherStep(dt, t);
-  g.drawImage(bgc, 0, 0);
+  g.drawImage(bgc, 0, 0, W, H);
   drawBacklight(t);
-  for (const s of treeSprites) g.drawImage(s.c, s.x + Math.round(Math.sin(t * 1.4 + s.seed) * gust * 1.2), s.y);
+  for (const s of treeSprites) g.drawImage(s.c, s.x + Math.round(Math.sin(t * 1.4 + s.seed) * gust * 2.4) / S, s.y, s.w, s.w);
+  cur = g;
   // часы: киевское время, секундная стрелка тикает
   const k = kyiv(), hh = (k.h % 12 + k.m / 60) / 12 * 6.283 - 1.571, mm = (k.m + k.s / 60) / 60 * 6.283 - 1.571, ss = k.s / 60 * 6.283 - 1.571;
-  line(262, 32, 262 + Math.cos(mm) * 3.4, 32 + Math.sin(mm) * 3.4, '#1D1A33');
-  line(262, 32, 262 + Math.cos(hh) * 2, 32 + Math.sin(hh) * 2, '#4A37C9');
-  P(262 + Math.round(Math.cos(ss) * 3.6), 32 + Math.round(Math.sin(ss) * 3.6), '#ff5c5c');
-  // телевизор: бежит график
+  lineQ(524, 64, 524 + Math.cos(mm) * 7, 64 + Math.sin(mm) * 7, '#1D1A33');
+  lineQ(524, 64, 524 + Math.cos(hh) * 4.5, 64 + Math.sin(hh) * 4.5, '#4A37C9');
+  lineQ(524, 64, 524 + Math.cos(ss) * 7.5, 64 + Math.sin(ss) * 7.5, '#ff5c5c'); q(524, 64, '#1D1A33');
+  // телевизор: бежит график с заливкой
   const tv = rng((t * 1.5 | 0) + 5);
-  R(101, 28, 28, 12, '#1d2440');
-  let py = 36; for (let x = 0; x < 26; x++) { py = Math.max(30, Math.min(38, py + (tv() < 0.5 ? -1 : 1))); P(102 + x, py, x > 18 ? '#7fe0b4' : '#5cc8ff'); }
+  Q(203, 57, 54, 23, '#16203e'); for (let y = 61; y < 80; y += 6) Q(203, y, 54, 1, '#1d2a50');
+  let py = 70;
+  for (let x = 0; x < 54; x++) {
+    py = Math.max(60, Math.min(77, py + (tv() < 0.5 ? -1 : 1)));
+    Q(203 + x, py + 1, 1, 79 - py, 'rgba(92,200,255,0.14)'); q(203 + x, py, x > 38 ? '#7fe0b4' : '#5cc8ff');
+  }
   // пар от кофемашины
-  for (let i = 0; i < 3; i++) { const q = (t * 0.8 + i / 3) % 1; g.fillStyle = `rgba(255,255,255,${(0.7 * (1 - q)).toFixed(2)})`; g.fillRect(279 + Math.round(Math.sin(t * 2 + i)), 45 - q * 7, 1, 1); }
+  for (let i = 0; i < 4; i++) { const p = (t * 0.8 + i / 4) % 1; Q(558 + Math.round(Math.sin(t * 2 + i) * 2), 88 - p * 16, 1, 1, `rgba(255,255,255,${(0.7 * (1 - p)).toFixed(2)})`); }
   // звёзды на ковре мерцают
-  for (let i = 0; i < 9; i++) { const a = Math.sin(t * 1.3 + i * 2.1); if (a > 0.3) P(86 + (i * 37) % 60, 61 + (i * 23) % 48, a > 0.8 ? '#ffe7a3' : '#b9a8ff'); }
+  for (let i = 0; i < 12; i++) { const a = Math.sin(t * 1.3 + i * 2.1); if (a > 0.3) { const x = 172 + (i * 37) % 120, y = 122 + (i * 23) % 96, c = a > 0.8 ? '#ffe7a3' : '#c9bcff'; q(x, y, c); if (a > 0.8) { q(x - 1, y, c); q(x + 1, y, c); q(x, y - 1, c); q(x, y + 1, c); } } }
   // чёрный кот на холодильнике
-  R(300, 52, 5, 4, '#1b1830'); P(300, 51, '#1b1830'); P(304, 51, '#1b1830'); R(305, 54, 2, 1, '#1b1830'); P(306, 53 + Math.round(Math.sin(t * 1.7)), '#1b1830');
-  if ((t % 4.3) > 0.15) { P(301, 53, '#ffd35c'); P(303, 53, '#ffd35c'); }
-  // кот спит у дивана, хвост шевелится
-  R(128, 122, 7, 4, '#e0915f'); R(127, 121, 3, 3, '#e0915f'); P(127, 120, '#e0915f'); P(129, 120, '#e0915f'); P(128, 122, '#1D1A33');
-  const tail = Math.round(Math.sin(t * 2) * 1.5); R(135, 123 + tail, 3, 1, '#c97a4c'); R(129, 125, 4, 1, '#c97a4c');
+  Q(600, 104, 10, 8, '#1b1830'); Q(598, 100, 7, 6, '#1b1830'); q(598, 99, '#1b1830'); q(604, 99, '#1b1830');
+  Q(610, 104 + Math.round(Math.sin(t * 1.7) * 2), 2, 6, '#1b1830');
+  if ((t % 4.3) > 0.15) { q(600, 102, '#ffd35c'); q(603, 102, '#ffd35c'); }
+  // рыжий кот спит на коврике, хвост шевелится
+  discQ(264, 248, 7, '#c97a4c', 0.6); discQ(264, 247, 6, '#e0915f', 0.6); q(262, 245, '#c97a4c'); q(266, 245, '#c97a4c'); q(264, 244, '#c97a4c'); q(268, 247, '#c97a4c');
+  discQ(255, 247, 4, '#e0915f'); q(252, 243, '#e0915f'); q(258, 243, '#e0915f'); Q(253, 247, 2, 1, '#1D1A33'); Q(257, 247, 1, 1, '#1D1A33'); q(255, 249, '#ff9ab8');
+  Q(271, 249 + Math.round(Math.sin(t * 2) * 1.5), 6, 2, '#c97a4c');
 
   // всё, что стоит на полу, рисуется по глубине (y)
   const items = [];
   for (const d of DESKS) { items.push({ y: d.y0 + 13, draw: () => drawDesk(d, t) }); items.push({ y: d.y0 + 21, draw: () => drawChairBack(d) }); }
-  items.push({ y: 72, draw: () => {                 // журнальный столик: кружка, книги, растение
-    furn(104, 64, 22, 6, 2, '#8a5f3f'); R(105, 72, 1, 1, '#5b3d2a'); R(124, 72, 1, 1, '#5b3d2a');
-    R(107, 65, 5, 3, '#4A37C9'); R(107, 66, 5, 1, '#ff9ab8'); R(115, 66, 3, 3, '#f7f5ff'); P(118, 67, '#d8d0f0'); if ((t * 2 | 0) % 2) P(116, 64, 'rgba(255,255,255,0.6)');
-    R(120, 66, 3, 2, '#b5643c'); P(120, 65, '#3d8a4c'); P(122, 65, '#58b86a'); P(121, 64, '#2f8a4a'); } });
+  items.push({ y: 72, draw: () => {                 // журнальный столик: книги, кружка, растение
+    Q(208, 142, 44, 3, 'rgba(0,0,0,0.2)');
+    Q(207, 127, 46, 16, '#3a2416'); Q(208, 128, 44, 10, '#9a6a44'); Q(208, 128, 44, 1, '#c09068'); Q(208, 138, 44, 4, '#6b4a33'); Q(210, 142, 2, 2, '#3a2416'); Q(248, 142, 2, 2, '#3a2416');
+    Q(213, 130, 11, 3, '#4A37C9'); Q(213, 130, 11, 1, '#7d6ef0'); Q(212, 133, 12, 2, '#ff9ab8');
+    Q(230, 131, 5, 5, '#f7f5ff'); Q(231, 131, 3, 1, '#6b4a33'); q(235, 133, '#d8d0f0'); if ((t * 2 | 0) % 2) { q(232, 128, 'rgba(255,255,255,0.6)'); q(233, 126, 'rgba(255,255,255,0.4)'); }
+    potQ(244, 137, '#b5643c'); } });
   items.push({ y: 74, draw: () => {                 // кресла-мешки
-    disc(84, 74, 6, '#7a2f2a', 0.8); disc(84, 73, 5, '#c95f4c', 0.8); disc(83, 72, 3, '#e0745f', 0.8); P(81, 70, '#f39a85');
-    disc(146, 74, 6, '#1f5f86', 0.8); disc(146, 73, 5, '#3f9fd0', 0.8); disc(145, 72, 3, '#5cc8ff', 0.8); P(143, 70, '#a8e4ff'); } });
+    discQ(168, 149, 12, '#5e2420', 0.8); discQ(168, 147, 11, '#c95f4c', 0.8); discQ(166, 145, 7, '#e0745f', 0.8); Q(161, 141, 3, 2, '#f39a85'); lineQ(160, 150, 176, 150, '#a94c3c');
+    discQ(292, 149, 12, '#123c58', 0.8); discQ(292, 147, 11, '#3f9fd0', 0.8); discQ(290, 145, 7, '#5cc8ff', 0.8); Q(285, 141, 3, 2, '#a8e4ff'); lineQ(284, 150, 300, 150, '#2f7fae'); } });
   items.push({ y: 92, draw: () => {                 // сиденье дивана с подушками
-    R(91, 89, 48, 14, '#2a1660'); R(92, 90, 46, 12, '#6a42bd'); R(92, 90, 46, 1, '#8a66da'); R(109, 91, 1, 10, '#53309e'); R(121, 91, 1, 10, '#53309e');
-    R(93, 91, 5, 4, '#ff8a6b'); R(93, 91, 5, 1, '#ffb39c'); R(132, 91, 5, 4, '#ff9ab8'); R(132, 91, 5, 1, '#ffc2d6'); } });
+    Q(182, 178, 96, 28, '#22104e'); Q(184, 180, 92, 24, '#6a42bd'); Q(184, 180, 92, 2, '#8a66da');
+    for (const sx of [218, 242]) Q(sx, 182, 1, 20, '#53309e');
+    Q(184, 200, 92, 2, '#53309e');
+    Q(186, 182, 11, 9, '#c94f3c'); Q(187, 182, 9, 7, '#ff8a6b'); Q(187, 182, 9, 1, '#ffb39c');
+    Q(263, 182, 11, 9, '#c95f88'); Q(264, 182, 9, 7, '#ff9ab8'); Q(264, 182, 9, 1, '#ffc2d6'); } });
   items.push({ y: 106, draw: () => {                // спинка и подлокотники
-    R(89, 101, 52, 7, '#2a1660'); R(90, 102, 50, 5, '#7a4fd1'); R(90, 102, 50, 1, '#9a76ea'); R(90, 106, 50, 1, '#5c37a8');
-    for (const ax of [88, 138]) { R(ax - 1, 87, 6, 21, '#2a1660'); R(ax, 88, 4, 19, '#5c37a8'); R(ax, 88, 4, 1, '#8460d6'); } } });
-  items.push({ y: 134, draw: () => {                // аркадный автомат
-    R(79, 119, 15, 17, '#120f24'); R(80, 120, 13, 15, '#2b2350'); R(80, 120, 2, 15, '#3d3470');
-    R(80, 120, 13, 3, (t * 1.5 | 0) % 4 ? '#ff5aa0' : '#ff8cc0'); R(81, 121, 11, 1, '#ffc2dc'); R(82, 124, 9, 7, '#0d0b1c');
+    Q(178, 202, 104, 14, '#22104e'); Q(180, 204, 100, 10, '#7a4fd1'); Q(180, 204, 100, 2, '#9a76ea'); Q(180, 212, 100, 2, '#5c37a8');
+    for (let x = 190; x < 280; x += 14) q(x, 208, '#5c37a8');
+    for (const ax of [176, 276]) { Q(ax - 2, 174, 12, 42, '#22104e'); Q(ax, 176, 8, 38, '#5c37a8'); Q(ax, 176, 8, 3, '#8460d6'); Q(ax + 6, 179, 2, 35, '#4a2c8e'); } } });
+  items.push({ y: 134, draw: () => {                // аркадный автомат с захватчиком на экране
+    Q(157, 237, 32, 36, '#0e0b1c'); Q(158, 238, 30, 34, '#2b2350'); Q(158, 238, 4, 34, '#3d3470'); Q(184, 238, 4, 34, '#1f1a3c');
+    Q(160, 240, 26, 6, (t * 1.5 | 0) % 4 ? '#ff5aa0' : '#ff8cc0'); Q(161, 241, 24, 1, '#ffc2dc'); for (let x = 163; x < 184; x += 4) q(x, 243, '#ffd6e8');
+    Q(161, 247, 24, 15, '#120f24'); Q(163, 249, 20, 11, '#0d0b1c');
     const playing = CHILL[4].owner && arrived(CHILL[4].owner) && CHILL[4].owner.place === CHILL[4];
-    const ar = (t * (playing ? 6 : 2) | 0);
-    for (let k = 0; k < 3; k++) { const ix = 83 + ((ar + k * 3) % 6), iy = 125 + k * 2; P(ix, iy, '#7fe0b4'); P(ix + 1, iy, '#7fe0b4'); }
-    R(84 + (ar * 5) % 6, 130, 2, 1, '#ff5aa0');
-    if (playing && (t * 3 | 0) % 2) R(83, 125, 7, 1, '#ffcf5c');
-    R(81, 131, 11, 3, '#3d3470'); R(81, 131, 11, 1, '#5a4c96'); P(83, 132, '#ff5c5c'); P(86, 131, '#f7f5ff'); P(88, 132, '#5cc8ff'); P(90, 132, '#ffcf5c'); } });
+    const ar = (t * (playing ? 6 : 2) | 0), INV = ['.#...#.', '..###..', '.##.##.', '#######', '#.#.#.#'];
+    const ix = 165 + (ar % 8), fr = ar % 2;
+    for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 7; xx++) if (INV[yy][xx] === '#' && !(fr && yy === 4 && xx % 2 === 0)) q(ix + xx, 250 + yy, '#7fe0b4');
+    Q(167 + (ar * 5) % 12, 258, 4, 1, '#ff5aa0'); if (playing && (t * 3 | 0) % 2) q(169 + (ar * 5) % 12, 256, '#ffcf5c');
+    Q(160, 262, 26, 8, '#3d3470'); Q(160, 262, 26, 1, '#5a4c96'); Q(164, 263, 2, 3, '#141220'); Q(163, 262, 4, 2, '#ff5c5c');
+    Q(171, 265, 2, 2, '#5cc8ff'); Q(175, 265, 2, 2, '#ffcf5c'); Q(179, 265, 2, 2, '#7fe0b4'); Q(158, 238, 1, 34, '#ff5aa0'); } });
   items.push({ y: 117, draw: () => {                // кухонный стол с пончиками и табуретами
-    disc(294, 119, 7, 'rgba(0,0,0,0.15)', 0.7); disc(294, 116, 8, '#5b3d2a', 0.7); disc(294, 116, 7, '#c98f5c', 0.7); disc(293, 115, 4, '#ddaa7a', 0.7);
-    disc(292, 115, 2, '#f7f5ff', 0.7); P(292, 115, '#e0915f'); P(291, 114, '#ff9ab8'); R(297, 116, 2, 2, '#ffcf5c');
-    for (const sx of [284, 304]) { disc(sx, 120, 3, '#141220', 0.7); disc(sx, 119, 3, '#353048', 0.7); P(sx - 1, 118, '#4a4466'); } } });
+    discQ(588, 240, 14, 'rgba(0,0,0,0.15)', 0.6);
+    for (const sx of [568, 608]) { discQ(sx, 240, 6, '#141220', 0.7); discQ(sx, 238, 6, '#353048', 0.7); Q(sx - 3, 235, 5, 1, '#4a4466'); }
+    discQ(588, 232, 16, '#5b3d2a', 0.7); discQ(588, 231, 15, '#c98f5c', 0.7); discQ(586, 229, 9, '#ddaa7a', 0.7);
+    discQ(583, 230, 5, '#f7f5ff', 0.7); discQ(583, 229, 3, '#e0915f', 0.7); q(583, 229, '#f7f5ff'); q(581, 228, '#ff9ab8'); q(585, 228, '#5cc8ff'); q(583, 227, '#ffcf5c');
+    Q(594, 228, 4, 4, '#ffcf5c'); Q(594, 228, 4, 1, '#c97a2c'); q(598, 229, '#d8b040'); } });
   if (season === 'winter') items.push({ y: 140, draw: () => drawXmasTree(t) });
   for (const a of agents.values()) items.push({ y: a.y + 0.5, draw: () => drawBot(a, t) });
-  items.sort((p, q) => p.y - q.y).forEach(i => i.draw());
+  items.sort((p, q2) => p.y - q2.y).forEach(i => i.draw());
   if (ROOM_DIM[phase]) { g.fillStyle = ROOM_DIM[phase]; g.fillRect(76, 24, 232, 136); }
-  for (const c of cars) drawCar(c);
+  if (ROOM_WARM[phase]) { g.globalCompositeOperation = 'lighter'; g.fillStyle = `rgba(255,170,90,${ROOM_WARM[phase]})`; g.fillRect(76, 44, 232, 114); g.globalCompositeOperation = 'source-over'; }
+  for (const c of cars) drawCar(c, t);
   drawLampLight(t);
   drawStreetLights(t);
+  drawFireflies(t);
+  drawFog(t);
   drawWeather(t);
   drawStreaks(t);
+  drawFlash();
   for (const a of agents.values()) drawLabel(a, t);
 }
 
 // ---------- вывод на экран ----------
-let dpr = 1, scale = 1, ox = 0, oy = 0;
+let dpr = 1, ws = 1, ox = 0, oy = 0;                 // ws: экранных пикселей на клетку сцены
 function resize() {
   dpr = window.devicePixelRatio || 1;
   cv.width = Math.round(innerWidth * dpr); cv.height = Math.round(innerHeight * dpr);
-  scale = Math.max(1, Math.ceil(Math.max(cv.width / W, cv.height / H)));
-  ox = Math.round((cv.width - W * scale) / 2); oy = Math.round((cv.height - H * scale) / 2);
+  ws = Math.max(cv.width / W, cv.height / H);
+  ox = Math.round((cv.width - W * ws) / 2); oy = Math.round((cv.height - H * ws) / 2);
 }
 addEventListener('resize', resize); resize();
 const FONT_UI = 'Tiny5, "Segoe UI", sans-serif';
@@ -920,12 +1315,12 @@ function pixelBox(x, y, w, h, u, fill, edge) {
 }
 // облачка с репликами: рисуются в полном разрешении пиксельным шрифтом
 function bubbles(t) {
-  const fs = fontPx(scale * 0.4), u = Math.max(2, Math.round(scale * 0.5)), pad = u * 2;
+  const fs = fontPx(ws * 0.4), u = Math.max(2, Math.round(ws * 0.5)), pad = u * 2;
   ctx.font = `${fs}px ${FONT_UI}`; ctx.textBaseline = 'middle';
   for (const a of agents.values()) {
-    if (!a.say || a.say.until < t) continue;
+    if (!a.say || a.say.until < t || a.arriving) continue;
     const w = Math.ceil(ctx.measureText(a.say.text).width) + pad * 2 + u * 2, h = fs + pad * 2;
-    const cxp = ox + Math.round(a.x) * scale, bottom = oy + ((a.labelY ?? a.y - 20) - 2) * scale;
+    const cxp = Math.round(ox + a.x * ws), bottom = oy + ((a.labelY ?? a.y - 20) - 2) * ws;
     const x = Math.max(4 * u, Math.min(cv.width - w - 4 * u, Math.round(cxp - w / 2))), y = Math.round(bottom - h - u * 2);
     const fade = Math.min(1, (a.say.until - t) / 0.4, (t - (a.say.until - 4)) / 0.2);
     ctx.globalAlpha = Math.max(0, fade);
@@ -937,41 +1332,55 @@ function bubbles(t) {
   }
 }
 
-// ---------- панель агентов и кнопка сезона ----------
-let btn = null;
-function seasonIcon(x, y, u, s) {
-  const px = (dx, dy, c) => { ctx.fillStyle = c; ctx.fillRect(x + dx * u, y + dy * u, u, u); };
-  const map = {
-    winter: [[2,0],[2,1],[0,2],[1,2],[2,2],[3,2],[4,2],[2,3],[2,4],[0,0],[4,0],[0,4],[4,4]],
-    summer: [[1,0],[2,0],[3,0],[0,1],[1,1],[2,1],[3,1],[4,1],[2,2],[1,3],[3,4]],
-    autumn: [[2,0],[1,1],[2,1],[3,1],[0,2],[1,2],[2,2],[3,2],[4,2],[1,3],[2,3],[3,3],[2,4]],
-    spring: [[2,0],[1,1],[3,1],[2,2],[0,2],[4,2],[1,3],[3,3],[2,4]],
-  };
-  const col = { winter: '#9cd8ff', summer: '#7fb4ff', autumn: '#ff9a4a', spring: '#ff9ab8' }[s];
-  for (const [dx, dy] of map[s]) px(dx, dy, s === 'spring' && dx === 2 && dy === 2 ? '#ffcf5c' : col);
+// ---------- панель агентов, восход и закат, кнопки сезона и погоды ----------
+// значки 5x5: # основной цвет, o второй
+const ICON5 = {
+  spring: { rows: ['..#..', '.#.#.', '#.o.#', '.#.#.', '..#..'], col: '#ff9ab8', col2: '#ffcf5c' },
+  summer: { rows: ['.###.', '#####', '.###.', '..o..', '..o..'], col: '#58b86a', col2: '#c9925f' },
+  autumn: { rows: ['..#..', '.###.', '#####', '.###.', '..o..'], col: '#ff9a4a', col2: '#c9925f' },
+  winter: { rows: ['#.#.#', '..#..', '#####', '..#..', '#.#.#'], col: '#9cd8ff' },
+  clear:  { rows: ['#...#', '.###.', '.###.', '.###.', '#...#'], col: '#ffcf5c' },
+  rain:   { rows: ['.###.', '#####', '.....', 'o.o.o', '.o.o.'], col: '#c9c3e6', col2: '#7fb4ff' },
+  storm:  { rows: ['.###.', '#####', '..o..', '.oo..', '..o..'], col: '#9a92c4', col2: '#ffcf5c' },
+  snow:   { rows: ['#.#.#', '..#..', '#####', '..#..', '#.#.#'], col: '#e0f2ff' },
+  fog:    { rows: ['####.', '.....', '.####', '.....', '####.'], col: '#b9b2d6' },
+  wind:   { rows: ['####.', '....#', '###..', '.....', '#####'], col: '#a8e4ff' },
+};
+function pixIcon(x, y, u, ic) {
+  for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
+    const ch = ic.rows[yy][xx]; if (ch === '.') continue;
+    ctx.fillStyle = ch === 'o' ? ic.col2 : ic.col; ctx.fillRect(x + xx * u, y + yy * u, u, u);
+  }
 }
+let btns = [], hover = -1;
 function panel(t) {
   const u = Math.max(2, Math.round(2 * dpr)), fs = fontPx(2 * dpr), small = fs, lh = Math.round(fs * 1.3), pad = 6 * u;
   const list = [...agents.values()].filter(a => !a.leaving);
   const k = kyiv(), clock = `${String(k.h).padStart(2, '0')}:${String(k.m).padStart(2, '0')}`;
   const head = 'AI-ОФІС', sub = online ? `в офісі: ${list.length}` : 'сервер не запущено';
-  const seasonTxt = `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`;
+  const sun = sunTimes(), sunTxt = `схід ${kyivHM(sun.rise)} · захід ${kyivHM(sun.set)}`;
+  const opts = [
+    { key: 'season', txt: `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[season] },
+    { key: 'weather', txt: `Погода: ${WEATHER_UA[weather]}${weatherPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[weather] },
+  ];
   ctx.textBaseline = 'middle';
   const rows = list.map(a => {
     const act = activity(a, t);
     return { a, act, name: a.name, st: ACT_UA[act] + (act === 'work' && a.tool ? ' · ' + a.tool : '') };
   });
-  ctx.font = `${fs}px ${FONT_UI}`;
-  let w = ctx.measureText(head + '  ' + clock).width + 10 * u;
-  for (const r of rows) w = Math.max(w, ctx.measureText(r.name).width + 9 * u);
+  const btnH = lh + 2 * u, gap = 2 * u;
   ctx.font = `${small}px ${FONT_UI}`;
-  for (const r of rows) w = Math.max(w, ctx.measureText(r.st).width + 9 * u);
-  w = Math.max(w, ctx.measureText(sub).width, ctx.measureText(seasonTxt).width + 12 * u, 120 * dpr) + pad * 2;
-  w = Math.round(w);
-  const headH = lh + 2 * u, rowH = Math.round(lh * 1.55), btnH = lh + 2 * u;
-  const h = pad + headH + u * 3 + Math.max(1, rows.length) * rowH + u * 3 + btnH + pad;
-  const x = cv.width - w - 12 * u, y = 12 * u;
+  const optW = Math.max(...opts.map(o => ctx.measureText(o.txt).width)) + 16 * u;
   if (SHOW_HUD) {
+    ctx.font = `${fs}px ${FONT_UI}`;
+    let w = ctx.measureText(head + '  ' + clock).width + 10 * u;
+    for (const r of rows) w = Math.max(w, ctx.measureText(r.name).width + 9 * u);
+    ctx.font = `${small}px ${FONT_UI}`;
+    for (const r of rows) w = Math.max(w, ctx.measureText(r.st).width + 9 * u);
+    w = Math.round(Math.max(w, ctx.measureText(sub).width, ctx.measureText(sunTxt).width, optW, 120 * dpr) + pad * 2);
+    const headH = lh + 2 * u, rowH = Math.round(lh * 1.55);
+    const h = pad + headH + u * 3 + Math.max(1, rows.length) * rowH + u * 2 + lh + u * 2 + btnH * 2 + gap + pad;
+    const x = cv.width - w - 12 * u, y = 12 * u;
     ctx.globalAlpha = 0.94;
     pixelBox(x - u, y - u, w + 2 * u, h + 2 * u, u, '#4A37C9', 'rgba(74,55,201,0.35)');
     pixelBox(x, y, w, h, u, '#1D1A33', '#7d6ef0');
@@ -996,30 +1405,35 @@ function panel(t) {
       ctx.fillStyle = kd.body; ctx.fillRect(hx, hy + 5 * u, 6 * u, 2 * u);
       ctx.font = `${fs}px ${FONT_UI}`; ctx.fillStyle = '#f7f5ff';
       ctx.fillText(r.name, hx + 9 * u, ry + rowH * 0.32);
-      const col = r.act === 'work' ? '#7fe0b4' : r.act === 'wait' ? ((t * 2 | 0) % 2 ? '#ffcf5c' : '#c9a23f') : (r.act === 'coffee' || r.act === 'tea') ? '#ff9ab8' : '#b9a8ff';
+      const col = r.act === 'work' ? '#7fe0b4' : r.act === 'wait' ? ((t * 2 | 0) % 2 ? '#ffcf5c' : '#c9a23f') : (r.act === 'coffee' || r.act === 'tea') ? '#ff9ab8' : r.act === 'ride' ? '#ffc83a' : '#b9a8ff';
       ctx.font = `${small}px ${FONT_UI}`; ctx.fillStyle = col;
       ctx.fillText(r.st, hx + 9 * u, ry + rowH * 0.74);
       ry += rowH;
     }
-    ry += u * 3;
-    btn = { x: x + pad - u * 2, y: ry, w: w - pad * 2 + u * 4, h: btnH };
+    ry += u * 2;
+    ctx.fillStyle = '#9a92c4'; ctx.fillText(sunTxt, x + pad, ry + lh / 2);
+    ry += lh + u * 2;
+    btns = opts.map((o, i) => ({ ...o, x: x + pad - u * 2, y: ry + i * (btnH + gap), w: w - pad * 2 + u * 4, h: btnH }));
   } else {
-    ctx.font = `${small}px ${FONT_UI}`;
-    const bw = Math.round(ctx.measureText(seasonTxt).width + 16 * u);
-    btn = { x: cv.width - bw - 12 * u, y: 12 * u, w: bw, h: btnH };
+    btns = opts.map((o, i) => ({ ...o, x: cv.width - Math.round(optW) - 12 * u, y: 12 * u + i * (btnH + gap), w: Math.round(optW), h: btnH }));
   }
-  // кнопка сезона
-  pixelBox(btn.x, btn.y, btn.w, btn.h, u, btnHover ? '#2e2760' : '#231e48', btnHover ? '#b9a8ff' : '#4A37C9');
-  seasonIcon(btn.x + 4 * u, btn.y + Math.round(btn.h / 2) - Math.round(2.5 * u), u, season);
-  ctx.font = `${small}px ${FONT_UI}`; ctx.fillStyle = '#E0DAFA'; ctx.textAlign = 'left';
-  ctx.fillText(seasonTxt, btn.x + 11 * u, btn.y + btn.h / 2 + 1);
-  ctx.fillStyle = '#7d6ef0'; ctx.textAlign = 'right'; ctx.fillText('›', btn.x + btn.w - 4 * u, btn.y + btn.h / 2 + 1);
+  ctx.font = `${small}px ${FONT_UI}`;
+  btns.forEach((bt, i) => {
+    const hv = hover === i;
+    pixelBox(bt.x, bt.y, bt.w, bt.h, u, hv ? '#2e2760' : '#231e48', hv ? '#b9a8ff' : '#4A37C9');
+    pixIcon(bt.x + 4 * u, bt.y + Math.round(bt.h / 2) - Math.round(2.5 * u), u, bt.ic);
+    ctx.fillStyle = '#E0DAFA'; ctx.textAlign = 'left'; ctx.fillText(bt.txt, bt.x + 11 * u, bt.y + bt.h / 2 + 1);
+    ctx.fillStyle = '#7d6ef0'; ctx.textAlign = 'right'; ctx.fillText('›', bt.x + bt.w - 4 * u, bt.y + bt.h / 2 + 1);
+  });
   ctx.textAlign = 'left';
 }
-let btnHover = false;
-const inBtn = e => { if (!btn) return false; const px = e.clientX * dpr, py = e.clientY * dpr; return px >= btn.x && px <= btn.x + btn.w && py >= btn.y && py <= btn.y + btn.h; };
-addEventListener('click', e => { if (inBtn(e)) setSeason(SEASONS[(SEASONS.indexOf(seasonPick) + 1) % SEASONS.length]); });
-addEventListener('mousemove', e => { btnHover = inBtn(e); cv.style.cursor = btnHover ? 'pointer' : 'default'; });
+const btnAt = e => { const px = e.clientX * dpr, py = e.clientY * dpr; return btns.findIndex(bt => px >= bt.x && px <= bt.x + bt.w && py >= bt.y && py <= bt.y + bt.h); };
+addEventListener('click', e => {
+  const bt = btns[btnAt(e)]; if (!bt) return;
+  if (bt.key === 'season') setSeason(SEASONS[(SEASONS.indexOf(seasonPick) + 1) % SEASONS.length]);
+  else setWeather(WEATHERS[(WEATHERS.indexOf(weatherPick) + 1) % WEATHERS.length]);
+});
+addEventListener('mousemove', e => { hover = btnAt(e); cv.style.cursor = hover >= 0 ? 'pointer' : 'default'; });
 
 let last = performance.now();
 function loop(now) {
@@ -1033,7 +1447,7 @@ function loop(now) {
   frame(t, Math.min(dt, 0.1));
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = '#0b0a16'; ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.drawImage(scr, ox, oy, W * scale, H * scale);
+  ctx.drawImage(scr, ox, oy, W * ws, H * ws);
   bubbles(t);
   panel(t);
 }
@@ -1041,7 +1455,8 @@ function loop(now) {
 // ---------- данные ----------
 let online = false;
 async function poll() {
-  if (DEMO) { online = true; sync(DEMO_LIST); return; }
+  // #leave: в демо Codex через 15 с уходит, чтобы проверить такси
+  if (DEMO) { online = true; sync(DEMO_LIST.filter(x => !(HASH.includes('leave') && x.id === 'd2' && performance.now() > 15000))); return; }
   try {
     const res = await fetch(SERVER + '/state', { cache: 'no-store', signal: AbortSignal.timeout(1500) });
     const data = await res.json();
@@ -1060,11 +1475,14 @@ const DEMO_LIST = [
 ];
 function refreshScene() {
   season = seasonNow(); phase = phaseNow();
+  const w = weatherNow();
+  if (w !== weather) { weather = w; weatherSince = performance.now() / 1000; }
   drops.length = 0; splashes.length = 0; ripples.length = 0;
   renderBg(); buildTrees();
 }
 refreshScene();
-setInterval(() => { const p = phaseNow(), s = seasonNow(); if (p !== phase || s !== season) refreshScene(); }, 60e3);
+weatherSince = 0;                                    // при запуске погода сразу в полную силу
+setInterval(() => { if (phaseNow() !== phase || seasonNow() !== season || weatherNow() !== weather) refreshScene(); }, 5e3);
 setInterval(poll, 2000); poll();
 if (document.fonts) document.fonts.load('20px Tiny5 ', 'Сезон AI').catch(() => {});
 requestAnimationFrame(loop);
