@@ -2,7 +2,7 @@
 
 English · [Русский](README.ru.md)
 
-A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io/) that turns the AI tools running on your Windows PC into little office workers. Open Claude Code, Codex, ChatGPT or the Claude desktop app, and a bot arrives by taxi, sits at a desk and starts typing. Close the program, and it walks out to the curb and catches a taxi home.
+A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io/) that turns the AI tools running on your Windows PC into little office workers. Open Claude Code, Codex, ChatGPT or the Claude desktop app, and a bot arrives in its own car, sits at a desk and starts typing. Close the program, and it walks out to the curb and rides home.
 
 ![Autumn night](docs/screenshots/autumn-night.png)
 
@@ -25,8 +25,12 @@ A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io
 - **Idle for 40 seconds:** it goes to relax on the sofa, the bean bags, the arcade machine or in the kitchen.
 - **Coffee breaks:** every few minutes a working bot walks to the coffee machine or the water cooler.
 - **Speech bubbles** in Ukrainian ("Привіт!", "Правлю файл", "Кава!"), never more than two at once.
-- **Murchyk the cat** sleeps on his mat, wanders around, sits next to a bot working at its desk, curls up purring beside bots on the sofa and begs at the coffee machine. Bots answer him, and little hearts float up.
-- **Taxi:** new bots arrive by taxi and get out one by one; a leaving bot waits at the curb with its phone, and the taxi picks it up. Other cars queue behind a stopped taxi.
+- **Murchyk the cat** sleeps on his mat, wanders around, sits next to a bot working at its desk, curls up purring beside bots on the sofa and begs at the coffee machine, where a bot sometimes tosses him a treat. Bots answer him, and little hearts float up.
+- **Own cars:** Claude arrives and leaves in a white Tesla, ChatGPT in a black GRANDE limousine about one time in four (a taxi otherwise), Codex by taxi. Bots get out one by one, a leaving bot waits at the curb, and other cars queue behind a stopped one.
+- **"Busification"** (a Ukrainian meme): a resting bot sometimes walks out to the bench on the right. Rarely, an olive ТЦК (draft office) van swerves onto the sidewalk on the way, leaving tire marks. Two soldiers surround the bot ("Пред'явіть документи!"), check its papers ("Бусифікуємо!") and take it away; the van backs up, straightens and speeds off. A few minutes later the bot comes back in its own car.
+- **Coffee table:** now and then two bots sit at the round kitchen table with coffee and chocolate and chat while the chocolate bar shrinks.
+- **What they are doing:** the panel and speech bubbles show the real current action, for example "править JournalPage.tsx", "термінал: git push" or "думає над «Привіт…»". ChatGPT and the Claude app have no hooks, so they show "пише відповідь у чаті" while busy.
+- **Dialogues:** bots talk to each other, partly about their real work (GPT asks Claude which file it is editing, someone notices a `git push`, Codex asks GPT for a report). GPT shows Claude a drawing, Claude shows GPT how to write code, Codex bosses GPT around, plus small talk about coffee, lunch and the market.
 - **Desk lamps** switch on when a bot sits down and off when it leaves. At night the room stays warmly lit and the lamps glow.
 - **Seasons:** spring blossom and flowers, summer greenery, autumn leaves, winter snow with a Christmas tree and a snowman. Auto mode picks the season by month.
 - **Weather** changes by itself every 6 to 15 minutes, with odds that fit the season: clear, rain (puddles, ripples, wet road reflecting the lamps and the neon sign), thunderstorm with lightning, snow, fog drifting over the street, strong wind with flying leaves. Bots comment on it.
@@ -62,11 +66,11 @@ Test without any AI running: with the server on, run `node test-agent.mjs TEST` 
 - **Season and weather:** the buttons in the panel, or the *Season* and *Weather* properties in Wallpaper Engine's wallpaper settings.
 - **Sound:** the *Sound* button in the panel, or the *Sound* and *Volume* properties in Wallpaper Engine (35% by default). In a normal browser the sound starts after the first click.
 - **Hide the panel:** open `index.html#nohud` (the two buttons stay).
-- **Preview with fake agents:** `index.html#demo`. Add `-winter`, `-night`, `-storm`, `-fog` and so on to force a look, for example `index.html#demo-summer-night-storm`. `-leave` makes one fake agent leave after 15 seconds to show the taxi.
+- **Preview with fake agents:** `index.html#demo`. Add `-winter`, `-night`, `-storm`, `-fog` and so on to force a look, for example `index.html#demo-summer-night-storm`. `-leave` makes one fake agent leave after 15 seconds to show the taxi, `-bus` plays the van scene right away, `-limo` puts GPT in the limousine.
 
 ## Privacy
 
-- The hook sends only the session id, the folder name, the event name, the tool name (`Bash`, `Edit`…) and a process id. Your prompts, commands and code are never sent.
+- The hook sends the session id, the folder name, the event name, the tool name (`Bash`, `Edit`…), a process id and one short caption of what the agent is doing: a file name, the first word or two of a command (`git push`), a site's domain, or the first 6 characters of your prompt followed by "…". Full prompts, commands and code are never sent, and nothing leaves your PC.
 - The server listens on `127.0.0.1:7777` only and is not reachable from other machines.
 - The hook always exits successfully, so it never slows down or breaks Claude Code or Codex, even when the server is off.
 - To see which programs are open, the server asks Windows for the process list through PowerShell every 4 seconds.

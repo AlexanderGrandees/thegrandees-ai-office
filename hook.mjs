@@ -1,9 +1,33 @@
 // Хук для Claude Code и Codex: читает событие из stdin и отправляет короткую сводку на сервер офиса.
 // Аргумент: claude или codex (кто запустил хук).
-// Текст твоих запросов и команд НЕ отправляется: только id сессии, папка, событие и имя инструмента.
+// Полный текст запросов и команд НЕ отправляется. Кроме id сессии, папки, события и имени инструмента
+// уходит только короткая подпись (detail): имя файла, первые слова команды, домен сайта
+// или первые 6 символов запроса с «…». Всё остаётся на этом компьютере (127.0.0.1).
 // Всегда выходит с кодом 0, чтобы никогда не мешать работе Claude, даже если сервер выключен.
 const URL = `http://127.0.0.1:${process.env.OFFICE_PORT || 7777}/event`;
 setTimeout(() => process.exit(0), 2000);
+
+// короткая подпись того, что агент делает сейчас
+const clip = (v, n) => { const t = String(v || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n) + '…' : t; };
+const base = f => String(f).split(/[\\/]/).filter(Boolean).pop() || '';
+function detailOf(ev) {
+  try {
+    if (ev.hook_event_name === 'UserPromptSubmit') return clip(ev.prompt, 6) || undefined;
+    if (ev.hook_event_name !== 'PreToolUse' && ev.hook_event_name !== 'PermissionRequest') return undefined;
+    const ti = ev.tool_input || {};
+    const f = ti.file_path || ti.notebook_path || ti.path;
+    if (f) return clip(base(f), 22);
+    if (ti.command) {
+      const w = String(Array.isArray(ti.command) ? ti.command.join(' ') : ti.command).trim().split(/\s+/);
+      const cmd = base(w[0]).replace(/\.(exe|cmd)$/i, '');
+      return clip(/^(git|npm|npx|dotnet|pnpm|yarn|cargo|go|python3?|pip|node)$/.test(cmd) && w[1] ? `${cmd} ${w[1]}` : cmd, 18);
+    }
+    if (ti.url) { try { return new globalThis.URL(ti.url).hostname.replace(/^www\./, '').slice(0, 22); } catch { return undefined; } }
+    if (ti.query || ti.pattern) return clip(ti.query || ti.pattern, 6);
+    if (ti.description) return clip(ti.description, 10);
+  } catch {}
+  return undefined;
+}
 
 let raw = '';
 process.stdin.setEncoding('utf8');
@@ -12,6 +36,7 @@ process.stdin.on('end', async () => {
   try {
     const ev = JSON.parse(raw);
     const body = {
+      detail: detailOf(ev),
       agent: process.argv[2] === 'codex' ? 'codex' : 'claude',
       ppid: process.ppid,
       session_id: ev.session_id,

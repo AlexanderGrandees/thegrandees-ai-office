@@ -112,22 +112,23 @@ function apply(ev) {
   if (!id) return;
   const now = Date.now();
   let s = sessions.get(id);
-  if (!s) { s = { id, kind: ev.agent === 'codex' ? 'codex' : 'claude', folder: '', status: 'idle', tool: '', last: now, ppid: 0, pid: 0 }; sessions.set(id, s); }
+  if (!s) { s = { id, kind: ev.agent === 'codex' ? 'codex' : 'claude', folder: '', status: 'idle', tool: '', detail: '', last: now, ppid: 0, pid: 0 }; sessions.set(id, s); }
   if (ev.cwd) s.folder = folderOf(ev.cwd);
   if (ev.ppid) s.ppid = Number(ev.ppid);
   s.last = now;
   const msg = String(ev.message || '');
+  const detail = String(ev.detail || '').slice(0, 24);
   switch (ev.hook_event_name) {
-    case 'SessionStart': s.status = 'idle'; s.tool = ''; break;
-    case 'UserPromptSubmit': s.status = 'working'; s.tool = 'думает'; break;
-    case 'PreToolUse': s.status = 'working'; s.tool = String(ev.tool_name || '').slice(0, 40); break;
+    case 'SessionStart': s.status = 'idle'; s.tool = ''; s.detail = ''; break;
+    case 'UserPromptSubmit': s.status = 'working'; s.tool = 'думает'; s.detail = detail; break;
+    case 'PreToolUse': s.status = 'working'; s.tool = String(ev.tool_name || '').slice(0, 40); s.detail = detail; break;
     case 'PostToolUse': s.status = 'working'; break;
-    case 'PermissionRequest': s.status = 'waiting'; s.tool = String(ev.tool_name || '').slice(0, 40); break;
+    case 'PermissionRequest': s.status = 'waiting'; s.tool = String(ev.tool_name || '').slice(0, 40); s.detail = detail; break;
     case 'Notification':
       if (ev.notification_type === 'idle_prompt' || /waiting for your input/i.test(msg)) { s.status = 'idle'; s.tool = ''; }
       else { s.status = 'waiting'; s.tool = msg.slice(0, 80); }
       break;
-    case 'Stop': s.status = 'idle'; s.tool = ''; break;
+    case 'Stop': s.status = 'idle'; s.tool = ''; s.detail = ''; break;
     case 'SessionEnd': s.status = 'gone'; break;
   }
   if (s.ppid && !procTable.has(s.ppid)) scan();
@@ -180,12 +181,13 @@ function state() {
       name: LABEL[a.kind] + (s?.folder ? ` · ${s.folder}` : ''),
       status: fresh ? s.status : (a.cpuBusy ? 'working' : 'idle'),
       tool: fresh ? s.tool : '',
+      detail: fresh && s.status !== 'idle' ? s.detail : '',
       hooks: !!s,
     });
   }
   // Сессия без найденного процесса (или сканирование недоступно): показываем, пока от неё были события за 2 минуты.
   const linked = new Set(byPid.values());
-  for (const s of live) if (!linked.has(s) && (!lastScanOk || now - s.last < 120e3)) out.push({ id: s.id, kind: s.kind, name: LABEL[s.kind] + (s.folder ? ` · ${s.folder}` : ''), status: s.status, tool: s.tool, hooks: true });
+  for (const s of live) if (!linked.has(s) && (!lastScanOk || now - s.last < 120e3)) out.push({ id: s.id, kind: s.kind, name: LABEL[s.kind] + (s.folder ? ` · ${s.folder}` : ''), status: s.status, tool: s.tool, detail: s.status !== 'idle' ? s.detail : '', hooks: true });
   return out;
 }
 
