@@ -181,14 +181,17 @@ function setWeather(v) {
 // их не применяем повторно, чтобы выбор кнопкой не сбрасывался.
 window.wallpaperPropertyListener = {
   applyUserProperties(p) {
-    for (const [key, set] of [['season', setSeason], ['weather', setWeather]]) {
+    if (p.volume) setVolume(p.volume.value);
+    for (const [key, set] of [['season', setSeason], ['weather', setWeather], ['sound', v => setSound(v === true || v === 'true')]]) {
       if (!p[key]) continue;
       const v = p[key].value, mem = `office-${key}-prop`;
-      if (store.get(mem) === v) continue;
-      store.set(mem, v);
+      if (store.get(mem) === String(v)) continue;
+      store.set(mem, String(v));
       set(v);
     }
   },
+  // Wallpaper Engine ставит обои на паузу, когда открыта игра на весь экран: тогда и звук молчит
+  setPaused(p) { paused = p; if (ac) { if (p) ac.suspend(); else ac.resume().catch(() => {}); } },
 };
 
 const SKY = { night: ['#0d0b24', '#1a1540', '#2b205a'], dusk: ['#4c2b70', '#cf6566', '#f0a05a'], day: ['#5b9de3', '#8cc2f0', '#c4e2f6'] };
@@ -669,7 +672,7 @@ function weatherStep(dt, t) {
   if (storm && rp > 0.5) {
     if (!nextFlash) nextFlash = t + rand(3, 8);
     if (t > nextFlash) {
-      flash = 1; nextFlash = t + rand(7, 18); flash2 = Math.random() < 0.5 ? t + 0.22 : 0;
+      flash = 1; nextFlash = t + rand(7, 18); flash2 = Math.random() < 0.5 ? t + 0.22 : 0; sfx.thunder(rand(0.2, 1.4));
       const near = [...agents.values()].filter(a => !a.arriving && arrived(a) && !a.leaving);
       if (near.length && Math.random() < 0.45) say(pick(near), pick(LINES.flash), t, false);
     }
@@ -787,7 +790,7 @@ function breakTick(a, t) {
   if (a.leaving || a.arriving) return;
   if (a.brk) {
     const there = arrived(a) && a.place === a.brk.spot;
-    if (there && !a.brk.until) { a.brk.until = t + rand(10, 18); say(a, pick(LINES[a.brk.spot.act]), t, true); }
+    if (there && !a.brk.until) { a.brk.until = t + rand(10, 18); say(a, pick(LINES[a.brk.spot.act]), t, true); sfx.pour(); }
     if (a.status === 'waiting' || (a.brk.until && t > a.brk.until)) endBreak(a, t);
     return;
   }
@@ -805,7 +808,7 @@ function sync(list) {
     seen.add(s.id);
     const a = agents.get(s.id) || newAgent(s);
     a.name = s.name; a.tool = s.tool || '';
-    if (a.status !== s.status) { a.status = s.status; a.idleSince = s.status === 'idle' ? t : null; if (s.status === 'waiting' && !a.arriving) say(a, pick(LINES.wait), t, true); }
+    if (a.status !== s.status) { a.status = s.status; a.idleSince = s.status === 'idle' ? t : null; if (s.status === 'waiting' && !a.arriving) { say(a, pick(LINES.wait), t, true); sfx.ding(); } }
     a.leaving = false;
   }
   for (const a of [...agents.values()]) if (!seen.has(a.id) && !a.leaving) leave(a);
@@ -872,6 +875,7 @@ function say(a, s, t, force) {
   const busy = [...agents.values()].filter(x => x !== a && x.say && x.say.until > t).length;
   if (!force && busy >= MAX_BUBBLES) return;
   a.say = { text: s, until: t + 4 }; a.nextSay = t + (FAST ? rand(5, 9) : rand(25, 60));
+  if (!a.arriving) sfx.blip(a.kind);
 }
 function chatTick(a, t) {
   if (a.say && a.say.until < t) a.say = null;
@@ -987,8 +991,8 @@ function lampStep(dt, t) {
   for (const d of DESKS) {
     const o = d.owner, here = o && arrived(o) && o.place === d;
     const want = here ? 1 : 0;
-    if (want && !d.lamp) { if (!d.lampOn) d.lampOn = t + 0.5; if (t >= d.lampOn) { d.lamp = 1; d.lampAt = t; d.lampOn = 0; } }
-    else if (!want && d.lamp) { if (!d.lampOn) d.lampOn = t + 1.2; if (t >= d.lampOn) { d.lamp = 0; d.lampOn = 0; } }
+    if (want && !d.lamp) { if (!d.lampOn) d.lampOn = t + 0.5; if (t >= d.lampOn) { d.lamp = 1; d.lampAt = t; d.lampOn = 0; sfx.click(); } }
+    else if (!want && d.lamp) { if (!d.lampOn) d.lampOn = t + 1.2; if (t >= d.lampOn) { d.lamp = 0; d.lampOn = 0; sfx.click(); } }
     else d.lampOn = 0;
   }
 }
@@ -1141,7 +1145,7 @@ function taxiStep(dt, t) {
   if (taxi.state === 'come') {
     const d = TAXI_STOP - taxi.x;
     taxi.v = Math.max(5, Math.min(70, d * 1.6));
-    if (d <= 0.3) { taxi.x = TAXI_STOP; taxi.v = 0; taxi.state = 'stop'; taxi.at = t; }
+    if (d <= 0.3) { taxi.x = TAXI_STOP; taxi.v = 0; taxi.state = 'stop'; taxi.at = t; sfx.horn(); }
   } else if (taxi.state === 'stop') {
     // выпускаем приехавших по одному, сажаем тех, кто ждёт у бордюра
     const s2 = t - taxi.at, all = [...agents.values()];
@@ -1152,7 +1156,9 @@ function taxiStep(dt, t) {
         if (t >= a.exitAt) { a.arriving = false; a.x = 192; a.y = 181; a.nextSay = Math.max(a.nextSay, t + 3); taxi.busy = t; }
       } else if (atCurb(a)) { agents.delete(a.id); taxi.busy = t; }
     }
-    taxi.door = s2 > 0.35 && t - (taxi.busy || taxi.at + 0.8) < 1.4;
+    const door = s2 > 0.35 && t - (taxi.busy || taxi.at + 0.8) < 1.4;
+    if (door !== !!taxi.door) sfx.door();
+    taxi.door = door;
     // ждём ещё немного, если кто-то уже идёт к выходу
     const waiting = all.some(a => a.arriving || atCurb(a)), coming = all.some(a => a.leaving && !atCurb(a));
     if (s2 > 2.6 && !waiting && t - (taxi.busy || 0) > 1.4 && !(coming && s2 < 8)) taxi.state = 'go';
@@ -1207,10 +1213,96 @@ function drawCar(c, t) {
   }
 }
 
+// ---------- звук: всё синтезируется в WebAudio, без звуковых файлов ----------
+// Фон: дождь, ветер, гул города, машины. События: гром, клавиатуры, лампы, такси, кофе, реплики, сигнал «ждёт тебя».
+let soundOn = store.get('office-sound') !== 'off', volume = Math.max(0, Math.min(1, +(store.get('office-volume') ?? 35) / 100));
+let ac = null, master = null, beds = null, WHITE = null, BROWN = null, paused = false;
+const sndNext = { cricket: 0, bird: 0 };
+function audioInit() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (ac || !AC) return;
+  ac = new AC(); master = ac.createGain(); master.gain.value = soundOn ? volume : 0; master.connect(ac.destination);
+  const buf = brown => {
+    const n = ac.sampleRate * 2, bf = ac.createBuffer(1, n, ac.sampleRate), d = bf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < n; i++) { const w = Math.random() * 2 - 1; if (brown) { last = (last + 0.02 * w) / 1.02; d[i] = last * 3.5; } else d[i] = w; }
+    return bf;
+  };
+  WHITE = buf(false); BROWN = buf(true);
+  const bed = (brown, filters) => {
+    const src = ac.createBufferSource(), gn = ac.createGain(); src.buffer = brown ? BROWN : WHITE; src.loop = true;
+    let node = src; for (const f of filters) { node.connect(f); node = f; }
+    gn.gain.value = 0; node.connect(gn); gn.connect(master); src.start(); return gn;
+  };
+  const windF = filt('bandpass', 400, 0.8);
+  beds = {
+    rain: bed(false, [filt('highpass', 600), filt('lowpass', 5000)]),
+    rumble: bed(true, [filt('lowpass', 260)]),
+    wind: bed(true, [windF]), windF,
+    traffic: bed(true, [filt('lowpass', 420)]),
+  };
+  if (ac.state === 'suspended') ac.resume().catch(() => {});
+}
+function filt(type, f, Q = 0.7) { const x = ac.createBiquadFilter(); x.type = type; x.frequency.value = f; x.Q.value = Q; return x; }
+const sndOk = () => ac && soundOn && !paused && ac.state === 'running';
+function tone(freq, dur, type = 'sine', vol = 0.1, when = 0, slideTo = 0) {
+  if (!sndOk()) return;
+  const o = ac.createOscillator(), gn = ac.createGain(), t0 = ac.currentTime + when;
+  o.type = type; o.frequency.setValueAtTime(freq, t0); if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+  gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol, t0 + 0.008); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + dur + 0.05);
+}
+function burst(dur, vol, filters, when = 0, attack = 0.004, brown = false) {
+  if (!sndOk()) return;
+  const src = ac.createBufferSource(), gn = ac.createGain(), t0 = ac.currentTime + when;
+  src.buffer = brown ? BROWN : WHITE;
+  let node = src; for (const f of filters) { node.connect(f); node = f; }
+  gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol, t0 + attack); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  node.connect(gn); gn.connect(master); src.start(t0, Math.random() * 1.5); src.stop(t0 + dur + 0.05);
+}
+const VOICE = { claude: 520, 'claude-app': 600, codex: 380, chatgpt: 700 };
+const sfx = {
+  blip(kind) { const f = VOICE[kind] || 500; for (let i = 0; i < 3; i++) tone(f * (0.9 + Math.random() * 0.25), 0.05, 'square', 0.018, i * 0.07); },
+  ding() { tone(880, 0.3, 'triangle', 0.07); tone(1320, 0.4, 'triangle', 0.05, 0.13); },
+  click() { if (sndOk()) burst(0.025, 0.05, [filt('highpass', 1800)]); },
+  key() { if (sndOk()) burst(0.014, 0.012 + Math.random() * 0.012, [filt('bandpass', 2500 + Math.random() * 1500, 2)]); },
+  thunder(delay) {
+    if (!sndOk()) return;
+    burst(0.5, 0.25, [filt('lowpass', 1400)], delay, 0.01);
+    burst(4, 0.6, [filt('lowpass', 160)], delay + 0.05, 0.08, true);
+  },
+  horn() { tone(415, 0.13, 'square', 0.025); tone(415, 0.16, 'square', 0.025, 0.2); },
+  door() { if (sndOk()) burst(0.09, 0.14, [filt('lowpass', 380)], 0, 0.004, true); },
+  pour() { if (sndOk()) burst(1.8, 0.04, [filt('bandpass', 2600, 1.2)], 0.1, 0.25); },
+  cricket() { for (let i = 0; i < 3; i++) tone(4300, 0.035, 'sine', 0.012, i * 0.06); },
+  bird() { const n = 2 + (Math.random() * 3 | 0), f = 2600 + Math.random() * 900; for (let i = 0; i < n; i++) tone(f, 0.09, 'sine', 0.018, i * 0.13, f * (1.3 + Math.random() * 0.3)); },
+};
+function setSound(on) { soundOn = on; store.set('office-sound', on ? 'on' : 'off'); audioInit(); if (ac) { master.gain.value = on ? volume : 0; if (on) ac.resume().catch(() => {}); } }
+function setVolume(v) { volume = Math.max(0, Math.min(1, v / 100)); store.set('office-volume', String(Math.round(v))); if (master && soundOn) master.gain.value = volume; }
+function audioStep(dt, t) {
+  if (!sndOk()) return;
+  const now = ac.currentTime, set = (gn, v) => gn.gain.setTargetAtTime(v, now, 0.6), rp = ramp(t);
+  set(beds.rain, isWet() ? (weather === 'storm' ? 0.22 : 0.12) * rp * weatherK(t) : 0);
+  set(beds.rumble, 0.035 + (weather === 'storm' ? 0.08 : 0));
+  set(beds.wind, 0.04 + gust * (weather === 'wind' ? 0.3 : weather === 'storm' ? 0.2 : 0.1));
+  beds.windF.frequency.setTargetAtTime(300 + gust * 500 + Math.sin(t * 0.7) * 80, now, 0.3);
+  let tr = 0; for (const c of cars) tr += Math.max(0, 1 - Math.abs(c.x - W / 2) / 170) * (c.cur ?? c.v) / 70;
+  set(beds.traffic, Math.min(0.22, tr * 0.11));
+  // клавиатуры работающих агентов
+  const typing = [...agents.values()].filter(a => a.status === 'working' && arrived(a) && a.place === a.desk && !a.brk).length;
+  if (typing && Math.random() < dt * typing * 5) sfx.key();
+  // сверчки тёплой ночью, птицы ясным днём весной и летом
+  if (phase === 'night' && season !== 'winter' && !isWet() && weather !== 'snow') { if (t > sndNext.cricket) { sfx.cricket(); sndNext.cricket = t + rand(0.5, 1.8); } }
+  else if (phase === 'day' && (season === 'spring' || season === 'summer') && !isGrey()) { if (t > sndNext.bird) { sfx.bird(); sndNext.bird = t + rand(4, 12); } }
+}
+// браузер разрешает звук только после клика; в Wallpaper Engine он работает сразу
+addEventListener('pointerdown', () => { audioInit(); if (ac && ac.state === 'suspended' && !paused) ac.resume().catch(() => {}); });
+document.addEventListener('visibilitychange', () => { if (!ac) return; if (document.hidden) ac.suspend(); else if (!paused) ac.resume().catch(() => {}); });
+
 // ---------- кадр ----------
 function frame(t, dt) {
   windNow(t);
-  step(dt, t); carStep(dt, t); lampStep(dt, t); windStep(dt); weatherStep(dt, t);
+  step(dt, t); carStep(dt, t); lampStep(dt, t); windStep(dt); weatherStep(dt, t); audioStep(dt, t);
   g.drawImage(bgc, 0, 0, W, H);
   drawBacklight(t);
   for (const s of treeSprites) g.drawImage(s.c, s.x + Math.round(Math.sin(t * 1.4 + s.seed) * gust * 2.4) / S, s.y, s.w, s.w);
@@ -1345,6 +1437,8 @@ const ICON5 = {
   snow:   { rows: ['#.#.#', '..#..', '#####', '..#..', '#.#.#'], col: '#e0f2ff' },
   fog:    { rows: ['####.', '.....', '.####', '.....', '####.'], col: '#b9b2d6' },
   wind:   { rows: ['####.', '....#', '###..', '.....', '#####'], col: '#a8e4ff' },
+  soundOn:  { rows: ['..#..', '.##.o', '###.o', '.##.o', '..#..'], col: '#E0DAFA', col2: '#7fe0b4' },
+  soundOff: { rows: ['..#..', '.##..', '###.o', '.##..', '..#..'], col: '#6a628f', col2: '#ff5c5c' },
 };
 function pixIcon(x, y, u, ic) {
   for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
@@ -1362,6 +1456,7 @@ function panel(t) {
   const opts = [
     { key: 'season', txt: `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[season] },
     { key: 'weather', txt: `Погода: ${WEATHER_UA[weather]}${weatherPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[weather] },
+    { key: 'sound', txt: soundOn ? `Звук: увімк · ${Math.round(volume * 100)}%` : 'Звук: вимк', ic: soundOn ? ICON5.soundOn : ICON5.soundOff },
   ];
   ctx.textBaseline = 'middle';
   const rows = list.map(a => {
@@ -1379,7 +1474,7 @@ function panel(t) {
     for (const r of rows) w = Math.max(w, ctx.measureText(r.st).width + 9 * u);
     w = Math.round(Math.max(w, ctx.measureText(sub).width, ctx.measureText(sunTxt).width, optW, 120 * dpr) + pad * 2);
     const headH = lh + 2 * u, rowH = Math.round(lh * 1.55);
-    const h = pad + headH + u * 3 + Math.max(1, rows.length) * rowH + u * 2 + lh + u * 2 + btnH * 2 + gap + pad;
+    const h = pad + headH + u * 3 + Math.max(1, rows.length) * rowH + u * 2 + lh + u * 2 + btnH * opts.length + gap * (opts.length - 1) + pad;
     const x = cv.width - w - 12 * u, y = 12 * u;
     ctx.globalAlpha = 0.94;
     pixelBox(x - u, y - u, w + 2 * u, h + 2 * u, u, '#4A37C9', 'rgba(74,55,201,0.35)');
@@ -1431,7 +1526,8 @@ const btnAt = e => { const px = e.clientX * dpr, py = e.clientY * dpr; return bt
 addEventListener('click', e => {
   const bt = btns[btnAt(e)]; if (!bt) return;
   if (bt.key === 'season') setSeason(SEASONS[(SEASONS.indexOf(seasonPick) + 1) % SEASONS.length]);
-  else setWeather(WEATHERS[(WEATHERS.indexOf(weatherPick) + 1) % WEATHERS.length]);
+  else if (bt.key === 'weather') setWeather(WEATHERS[(WEATHERS.indexOf(weatherPick) + 1) % WEATHERS.length]);
+  else setSound(!soundOn);
 });
 addEventListener('mousemove', e => { hover = btnAt(e); cv.style.cursor = hover >= 0 ? 'pointer' : 'default'; });
 
@@ -1485,6 +1581,7 @@ weatherSince = 0;                                    // при запуске п
 setInterval(() => { if (phaseNow() !== phase || seasonNow() !== season || weatherNow() !== weather) refreshScene(); }, 5e3);
 setInterval(poll, 2000); poll();
 if (document.fonts) document.fonts.load('20px Tiny5 ', 'Сезон AI').catch(() => {});
+audioInit();
 requestAnimationFrame(loop);
 </script>
 </body>

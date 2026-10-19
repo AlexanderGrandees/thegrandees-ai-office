@@ -68,7 +68,22 @@
             "value": "wind"
           }
         ]
+      },
+      "sound": {
+        "order": 2,
+        "text": "Звук",
+        "type": "bool",
+        "value": true
+      },
+      "volume": {
+        "order": 3,
+        "text": "Гучність",
+        "type": "slider",
+        "min": 0,
+        "max": 100,
+        "value": 35
       }
-    }
+    },
+    "supportsaudioprocessing": false
   }
 }

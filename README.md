@@ -29,6 +29,7 @@ A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io
 - **Desk lamps** switch on when a bot sits down and off when it leaves. At night the room stays warmly lit and the lamps glow.
 - **Seasons:** spring blossom and flowers, summer greenery, autumn leaves, winter snow with a Christmas tree and a snowman. Auto mode picks the season by month.
 - **Weather** changes by itself every 6 to 15 minutes, with odds that fit the season: clear, rain (puddles, ripples, wet road reflecting the lamps and the neon sign), thunderstorm with lightning, snow, fog drifting over the street, strong wind with flying leaves. Bots comment on it.
+- **Sound,** all synthesised in the browser with no audio files: rain, wind, thunder, city hum and passing cars, keyboards of working bots, lamp clicks, the taxi horn and door, the coffee machine, little voice blips with each speech bubble, a soft chime when a bot waits for you, birds on clear spring and summer days, crickets on warm nights. It goes quiet when Wallpaper Engine pauses the wallpaper.
 - **Night:** street lamps, fairy lights on the hedge, fireflies over the grass on warm nights, car headlights.
 - **Wind behind the building:** light streaks pass behind the office, and the backlight, neon sign and street lamps flicker with the gusts.
 - **Day and night** follow the real sunrise and sunset in Kyiv for today's date, so winter evenings get dark earlier. The wall clock shows Kyiv time.
@@ -58,6 +59,7 @@ Test without any AI running: with the server on, run `node test-agent.mjs TEST` 
 ## Settings
 
 - **Season and weather:** the buttons in the panel, or the *Season* and *Weather* properties in Wallpaper Engine's wallpaper settings.
+- **Sound:** the *Sound* button in the panel, or the *Sound* and *Volume* properties in Wallpaper Engine (35% by default). In a normal browser the sound starts after the first click.
 - **Hide the panel:** open `index.html#nohud` (the two buttons stay).
 - **Preview with fake agents:** `index.html#demo`. Add `-winter`, `-night`, `-storm`, `-fog` and so on to force a look, for example `index.html#demo-summer-night-storm`. `-leave` makes one fake agent leave after 15 seconds to show the taxi.
 
