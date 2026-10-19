@@ -1471,7 +1471,7 @@ function draft(a, t) {
   if (a.brk) { if (a.spot !== a.brk.spot) a.brk.spot.owner = null; a.brk = null; }
   if (a.spot) { a.spot.owner = null; a.spot = null; }
   if (a.desk) { a.desk.owner = null; a.desk = null; }
-  a.away = { back: t + 15 };                            // через 15 секунд повертається, якщо програма ще відкрита
+  a.away = { back: t + (a.kind === 'codex' ? 30 : 45) }; // Codex повертається через 30 с, GPT через 45 с, якщо програма ще відкрита
 }
 function busStep(dt, t) {
   if (!bus) return;
