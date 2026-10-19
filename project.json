@@ -1,0 +1,23 @@
+{
+  "file": "index.html",
+  "title": "TheGrandees AI Office",
+  "description": "Пиксельный офис, где агенты — твои открытые AI-программы",
+  "type": "web",
+  "general": {
+    "properties": {
+      "season": {
+        "order": 0,
+        "text": "Сезон",
+        "type": "combo",
+        "value": "auto",
+        "options": [
+          { "label": "Авто (по месяцу)", "value": "auto" },
+          { "label": "Весна", "value": "spring" },
+          { "label": "Літо", "value": "summer" },
+          { "label": "Осінь", "value": "autumn" },
+          { "label": "Зима", "value": "winter" }
+        ]
+      }
+    }
+  }
+}

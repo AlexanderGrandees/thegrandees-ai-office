@@ -1,0 +1,1073 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TheGrandees AI Office</title>
+<style>
+  /* Tiny5: пиксельный шрифт с украинскими буквами (лицензия OFL, fonts/OFL.txt). Чёткий при размере, кратном 10px */
+  @font-face { font-family: 'Tiny5'; src: url(fonts/tiny5-cyr.woff2) format('woff2'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+  @font-face { font-family: 'Tiny5'; src: url(fonts/tiny5-lat.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+  html, body { margin: 0; height: 100%; background: #0b0a16; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+// Пиксельный AI-офис, вид сверху. Сцена рисуется в буфер 384x216 и растягивается целым множителем без сглаживания.
+// Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
+// Поверх сцены: погода по сезону, ветер за зданием, лампы на столах, перерывы на кофе, реплики, панель агентов.
+const W = 384, H = 216, SERVER = 'http://127.0.0.1:7777';
+const HASH = location.hash;
+const SHOW_HUD = !HASH.includes('nohud');
+const DEMO = HASH.includes('demo');                  // только для проверки: ненастоящие агенты
+const FAST = HASH.includes('fast');                  // только для проверки: частые перерывы и реплики
+
+const scr = document.createElement('canvas'); scr.width = W; scr.height = H;
+const g = scr.getContext('2d');
+const bgc = document.createElement('canvas'); bgc.width = W; bgc.height = H;
+const b = bgc.getContext('2d');
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+let cur = g;                                         // куда рисуют R и P: в фон, в кадр или в спрайт
+const R = (x, y, w, h, c) => { cur.fillStyle = c; cur.fillRect(Math.round(x), Math.round(y), w, h); };
+const P = (x, y, c) => R(x, y, 1, 1, c);
+function disc(cx, cy, r, c, sy = 1) { for (let y = -r; y <= r; y++) for (let x = -r; x <= r; x++) if (x * x + y * y <= r * r + r * 0.6) P(cx + x, cy + Math.round(y * sy), c); }
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  return '#' + [n >> 16, n >> 8 & 255, n & 255].map(v => Math.max(0, Math.min(255, Math.round(v * k))).toString(16).padStart(2, '0')).join('');
+}
+const pick = arr => arr[Math.random() * arr.length | 0];
+const rand = (a, b2) => a + Math.random() * (b2 - a);
+
+// ---------- пиксельный шрифт 3x5 (латиница для табличек) ----------
+const FONT = {
+  A:'010101111101101',B:'110101110101110',C:'011100100100011',D:'110101101101110',E:'111100110100111',F:'111100110100100',
+  G:'011100101101011',H:'101101111101101',I:'111010010010111',J:'001001001101010',K:'101101110101101',L:'100100100100111',
+  M:'101111111101101',N:'110101101101101',O:'010101101101010',P:'110101110100100',Q:'010101101110011',R:'110101110101101',
+  S:'011100010001110',T:'111010010010010',U:'101101101101111',V:'101101101101010',W:'101101111111101',X:'101101010101101',
+  Y:'101101010010010',Z:'111001010100111','0':'111101101101111','1':'010110010010111','2':'110001010100111',
+  '3':'110001010001110','4':'101101111001001','5':'111100110001110','6':'011100111101111','7':'111001010010010',
+  '8':'111101111101111','9':'111101111001110','-':'000000111000000','.':'000000000000010','!':'010010010000010',
+  '?':'110001010000010',':':'000010000010000','#':'101111101111101',' ':'000000000000000'
+};
+const textW = s => s.length * 4 - 1;
+function text(s, x, y, col) {
+  s = String(s).toUpperCase(); cur.fillStyle = col;
+  for (let i = 0; i < s.length; i++) {
+    const f = FONT[s[i]] || FONT['-'];
+    for (let p = 0; p < 15; p++) if (f[p] === '1') cur.fillRect(Math.round(x) + i * 4 + p % 3, Math.round(y) + (p / 3 | 0), 1, 1);
+  }
+}
+function tag(s, x, y, col) {
+  for (const [dx, dy] of [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[1,1],[1,-1],[-1,1]]) text(s, x + dx, y + dy, '#120f24');
+  text(s, x, y, col);
+}
+function line(x0, y0, x1, y1, col) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) || 1;
+  for (let i = 0; i <= n; i++) P(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, col);
+}
+
+// ---------- время: всегда киевское ----------
+const KFMT = (() => {
+  for (const timeZone of ['Europe/Kyiv', 'Europe/Kiev']) {
+    try { return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit', month: 'numeric', hourCycle: 'h23' }); } catch {}
+  }
+  return null;
+})();
+function kyiv() {
+  const d = new Date();
+  if (!KFMT) return { h: d.getHours(), m: d.getMinutes(), s: d.getSeconds(), mon: d.getMonth() + 1 };
+  const o = {}; for (const p of KFMT.formatToParts(d)) o[p.type] = +p.value;
+  return { h: o.hour % 24, m: o.minute, s: o.second, mon: o.month };
+}
+function phaseNow() {
+  const forced = HASH.match(/night|dusk|day/);
+  if (forced) return forced[0];
+  const k = kyiv(), h = k.h + k.m / 60;
+  if (h < 5.5 || h >= 21) return 'night';
+  if (h < 7.5 || h >= 18.5) return 'dusk';
+  return 'day';
+}
+let phase = phaseNow();
+
+// ---------- сезон: авто по месяцу или выбранный кнопкой ----------
+const SEASONS = ['auto', 'spring', 'summer', 'autumn', 'winter'];
+const SEASON_UA = { auto: 'Авто', spring: 'Весна', summer: 'Літо', autumn: 'Осінь', winter: 'Зима' };
+const WEATHER_UA = { spring: 'пелюстки', summer: 'дощ', autumn: 'вітер, листя', winter: 'сніг' };
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+let seasonPick = SEASONS.includes(store.get('office-season')) ? store.get('office-season') : 'auto';
+function seasonNow() {
+  const forced = HASH.match(/spring|summer|autumn|winter/);
+  if (forced) return forced[0];
+  if (seasonPick !== 'auto') return seasonPick;
+  const m = kyiv().mon;
+  return m === 12 || m <= 2 ? 'winter' : m <= 5 ? 'spring' : m <= 8 ? 'summer' : 'autumn';
+}
+let season = seasonNow();
+function setSeason(v) {
+  if (!SEASONS.includes(v)) return;
+  seasonPick = v; store.set('office-season', v);
+  refreshScene();
+}
+// Свойство «Сезон» в настройках Wallpaper Engine. При запуске WE присылает сохранённое значение: его не применяем повторно,
+// чтобы выбор кнопкой не сбрасывался.
+window.wallpaperPropertyListener = {
+  applyUserProperties(p) {
+    if (!p.season) return;
+    const v = p.season.value;
+    if (store.get('office-season-prop') === v) return;
+    store.set('office-season-prop', v);
+    setSeason(v);
+  },
+};
+
+const SKY = { night: ['#0d0b24', '#1a1540', '#2b205a'], dusk: ['#4c2b70', '#cf6566', '#f0a05a'], day: ['#5b9de3', '#8cc2f0', '#c4e2f6'] };
+const SKY_GREY = { night: ['#0e0d1c', '#17162b', '#22203a'], dusk: ['#3b3150', '#6c5a72', '#8d7a86'], day: ['#7f8ea8', '#9eabc0', '#bcc6d6'] };
+const SHADOW_BASE = { night: 'rgba(6,8,34,0.55)', dusk: 'rgba(60,20,70,0.25)', day: null };
+const SHADOW_SNOW = { night: 'rgba(14,24,78,0.5)', dusk: 'rgba(60,40,110,0.25)', day: null };
+const SHADOW = new Proxy({}, { get: (_, k) => (season === 'winter' ? SHADOW_SNOW : SHADOW_BASE)[k] });
+const ROOM_DIM = { night: 'rgba(14,10,44,0.38)', dusk: 'rgba(30,14,50,0.16)', day: null };   // ночью в комнате темнее, лампы видно
+const LOOK = {
+  spring: { grass: '#5a9a55', dots: ['#66a85f', '#4e8c4a', '#72b468', '#477f44'], flowers: ['#ff9ab8', '#ffffff', '#ffd35c', '#ffc2d6', '#ff9ab8'], nflow: 150, leaf: ['#2f6e3d', '#3d8a4c', '#58a865'], bloom: ['#ffb3cf', '#ffd6e6'] },
+  summer: { grass: '#4a8446', dots: ['#55934f', '#3f743d', '#5c9c57', '#3a6b3b'], flowers: ['#ffd35c', '#ff9ab8', '#ffffff', '#b9a8ff'], nflow: 60, leaf: ['#2a6337', '#357d44', '#4f9c5c'] },
+  autumn: { grass: '#7b8646', dots: ['#8a934f', '#6c763c', '#9c8644', '#8f6c38'], flowers: ['#e0745f', '#ffb347', '#ffd35c', '#c4553b', '#d9702f'], nflow: 220, leaf: ['#9c3f2b', '#d06a2c', '#eeb03a'] },
+  winter: { grass: '#e3e9f5', dots: ['#d3dcee', '#f3f6fc', '#c6d1e8', '#ffffff'], flowers: [], nflow: 0, leaf: null },
+};
+const wetSeason = () => season === 'summer';
+
+// ---------- геометрия ----------
+// Здание x 72..312, y 20..164. Стена с окнами 24..44, пол 44..158, дверь внизу x 184..200.
+// Слева чилл-зона (x 76..150), коридор x 154, рабочие столы (x 158..266), справа кухня (x 270..308).
+const V = 154;
+const DESKS = [];
+for (let r = 0; r < 2; r++) for (let i = 0; i < 4; i++) {
+  const x0 = 158 + i * 28, y0 = r ? 92 : 52, cx = x0 + 12;
+  DESKS.push({ x0, y0, cx, lane: y0 + 26, entry: [{ x: cx, y: y0 + 26 }, { x: cx, y: y0 + 20 }], face: 'up', sit: true, owner: null, desk: true, lamp: 0, lampOn: 0 });
+}
+// act: чем агент занят на этом месте (значок над головой и строка в панели)
+const CHILL = [
+  { lane: 82, entry: [{ x: 104, y: 82 }, { x: 104, y: 99 }], face: 'up', sit: true, act: 'tv' },
+  { lane: 82, entry: [{ x: 126, y: 82 }, { x: 126, y: 99 }], face: 'up', sit: true, act: 'tv' },
+  { lane: 142, entry: [{ x: 284, y: 142 }, { x: 284, y: 118 }], face: 'right', sit: true, act: 'tea' },
+  { lane: 82, entry: [{ x: 84, y: 82 }, { x: 84, y: 75 }], face: 'up', sit: true, act: 'music' },
+  { lane: 142, entry: [{ x: 86, y: 142 }], face: 'up', sit: false, act: 'game' },
+  { lane: 78, entry: [{ x: 276, y: 78 }, { x: 276, y: 60 }, { x: 280, y: 60 }], face: 'up', sit: false, act: 'coffee' },
+  { lane: 82, entry: [{ x: 115, y: 82 }, { x: 115, y: 99 }], face: 'up', sit: true, act: 'tv' },
+  { lane: 142, entry: [{ x: 304, y: 142 }, { x: 304, y: 118 }], face: 'left', sit: true, act: 'coffee' },
+  { lane: 82, entry: [{ x: 146, y: 82 }, { x: 146, y: 75 }], face: 'up', sit: true, act: 'music' },
+  { lane: 78, entry: [{ x: 290, y: 78 }, { x: 290, y: 88 }, { x: 295, y: 88 }], face: 'right', sit: false, act: 'tea' },
+  { lane: 142, entry: [{ x: 120, y: 142 }], face: 'up', sit: false, act: 'phone' },
+  { lane: 142, entry: [{ x: 236, y: 142 }], face: 'down', sit: false, act: 'phone' },
+].map(s => ({ ...s, owner: null }));
+const BREAK_SPOTS = [CHILL[5], CHILL[9]];             // кофемашина и кулер с кипятком
+function streetPlace() {
+  const ex = Math.random() < 0.5 ? -10 : W + 10;
+  return { lane: 142, entry: [{ x: 192, y: 142 }, { x: 192, y: 152 }, { x: 192, y: 166 }, { x: 192, y: 176 }, { x: ex, y: 176 }], street: true };
+}
+const spotOf = p => p.entry[p.entry.length - 1];
+const WINDOWS = [198, 230];
+const inWindow = (x, y) => y >= 27 && y < 41 && WINDOWS.some(wx => x >= wx + 1 && x < wx + 25);
+const inBuilding = (x, y) => x >= 72 && x < 312 && y >= 20 && y < 164;
+const inSign = (x, y) => x >= 148 && x < 236 && y >= 3 && y < 19;
+const LAMPS = [40, 140, 250, 344];
+const TREES = [[26, 26, 12], [54, 58, 9], [22, 104, 13], [50, 140, 8], [356, 28, 12], [334, 72, 9], [362, 118, 12], [336, 150, 8], [104, 8, 6], [280, 8, 7]];
+const PUDDLES = [[30, 177, 6], [118, 179, 4], [302, 175, 7], [88, 196, 9], [214, 206, 10], [334, 192, 7], [262, 178, 4]];
+
+// ---------- фон ----------
+// Мебель рисуется «три четверти»: верх, передняя грань, тёмный контур и светлая кромка, как у картинок GPT.
+function shell(x, y, w, h, c) { R(x - 1, y - 1, w + 2, h + 2, shade(c, 0.42)); R(x, y, w, h, c); R(x, y, w, 1, shade(c, 1.18)); }
+function furn(x, y, w, top, front, c) {
+  R(x - 1, y - 1, w + 2, top + front + 2, shade(c, 0.4));
+  R(x, y, w, top, c); R(x, y, w, 1, shade(c, 1.2));
+  R(x, y + top, w, front, shade(c, 0.72)); R(x, y + top, w, 1, shade(c, 0.58));
+}
+function bigPlant(cx, by, h, r, pot = '#eeeaf6') {
+  R(cx - 3, by - 5, 7, 6, shade(pot, 0.45)); R(cx - 2, by - 5, 5, 5, pot); R(cx - 2, by - 5, 5, 1, shade(pot, 0.82)); R(cx + 1, by - 4, 1, 3, shade(pot, 0.88));
+  for (let k = 0; k < 8; k++) {
+    const a = -Math.PI / 2 + (k - 3.5) * 0.36 + (r() - 0.5) * 0.25, L = h * (0.55 + r() * 0.45);
+    for (let i = 1; i <= L; i++) { const x = cx + Math.cos(a) * i, y = by - 5 + Math.sin(a) * i * 0.85; P(x, y, i > L * 0.55 ? '#5cbf6c' : '#2f8a4a'); if (i > 1 && i < L - 1) P(x + (k < 4 ? -1 : 1), y, '#3f9f58'); }
+  }
+}
+function vine(x, y0, len, r) {
+  for (let i = 0; i < len; i++) { const x1 = x + Math.round(Math.sin(i * 0.7 + x) * 1.2); P(x1, y0 + i, '#2f7a45'); if (i % 2 === 0) P(x1 + (i % 4 ? 1 : -1), y0 + i, r() < 0.5 ? '#58b86a' : '#3f9f58'); }
+}
+function renderBg() {
+  cur = b;
+  const r = rng(11), L = LOOK[season], winter = season === 'winter';
+  // трава или снег, кочки и камешки
+  R(0, 0, W, H, L.grass);
+  for (let i = 0; i < 1400; i++) P(r() * W, r() * 168, L.dots[r() * 4 | 0]);
+  if (!winter) for (let i = 0; i < 90; i++) { const x = r() * W, y = r() * 160; if (x > 66 && x < 318 && y > 14) continue; P(x, y, shade(L.grass, 0.78)); P(x - 1, y - 1, shade(L.grass, 0.85)); P(x + 1, y - 1, shade(L.grass, 0.85)); }
+  for (let i = 0; i < 14; i++) { const x = r() * W, y = r() * 160; if (x > 62 && x < 322 && y > 10) continue; R(x, y, 3, 2, winter ? '#c3cfe6' : '#8d8a9e'); P(x, y, winter ? '#ffffff' : '#a9a6b8'); }
+  for (let i = 0; i < L.nflow; i++) {
+    const x = r() * W, y = r() * 162; if (x > 66 && x < 318 && y > 14) continue;
+    const c = L.flowers[r() * L.flowers.length | 0];
+    P(x, y, c); if (season === 'autumn' && r() < 0.5) P(x + 1, y, shade(c, 0.8));
+  }
+  if (winter) for (let i = 0; i < 60; i++) { const x = r() * W, y = r() * 160; if (x > 66 && x < 318 && y > 14) continue; R(x, y, 3, 1, '#c3cfe6'); }
+  // тротуар крупной плиткой, бордюр, дорога
+  R(0, 168, W, 14, '#a8a4b8'); for (let x = 0; x < W; x += 12) R(x, 168, 1, 14, '#8f8ba2'); R(0, 175, W, 1, '#948fa6');
+  for (let x = 0; x < W; x += 12) { R(x + 1, 168, 11, 1, '#b8b4c8'); R(x + 1, 176, 11, 1, '#b8b4c8'); }
+  R(0, 182, W, 2, '#c9c5d6'); R(0, 184, W, 32, wetSeason() ? '#2c2a42' : '#36344c'); R(0, 184, W, 1, '#24223a');
+  for (let x = 4; x < W; x += 20) R(x, 199, 10, 1, '#d8d4e6');
+  for (let i = 0; i < 120; i++) P(r() * W, 185 + r() * 30, wetSeason() ? '#35334d' : '#3d3b55');
+  if (wetSeason()) for (const [x, y, s] of PUDDLES) { disc(x, y, s, 'rgba(70,90,140,0.45)', 0.35); R(x - s + 2, y - 1, Math.max(1, s - 2), 1, 'rgba(200,220,255,0.35)'); }
+  if (winter) {
+    for (let x = 0; x < W; x++) { const h = 2 + Math.round(1.5 + Math.sin(x * 0.7) + Math.sin(x * 0.23) * 1.5); R(x, 168, 1, h, '#eef3fb'); R(x, 182 - (x % 7 === 0 ? 1 : 0), 1, 2, '#e3e9f5'); }
+    for (let x = 0; x < W; x += 3) if (r() < 0.6) R(x, 184 + (r() < 0.5 ? 0 : 30), 2 + (r() * 3 | 0), 1, '#5a5874');
+  }
+  // дорожка к двери
+  R(184, 164, 16, 4, '#b8ad98'); for (let x = 185; x < 200; x += 5) R(x, 165, 3, 2, '#cfc4ae');
+  // вывеска с цветами по краям
+  R(147, 2, 90, 18, '#120f24'); R(148, 3, 88, 16, '#1D1A33'); R(148, 3, 88, 1, '#4A37C9'); R(148, 18, 88, 1, '#4A37C9');
+  R(147, 3, 1, 16, '#ff5aa0'); R(236, 3, 1, 16, '#5cc8ff');
+  text('THEGRANDEES', 192 - textW('THEGRANDEES') / 2, 5, '#b9a8ff'); text('AI OFFICE', 192 - textW('AI OFFICE') / 2, 12, '#ffcf5c');
+  for (const px of [141, 243]) { R(px - 2, 14, 5, 4, '#cfc9df'); R(px - 2, 14, 5, 1, '#eeeaf6'); for (let k = 0; k < 7; k++) P(px - 3 + k, 13 - (k % 2) - (k === 3 ? 2 : 0), winter ? '#f4f7fd' : k % 2 ? '#58b86a' : '#2f8a4a'); }
+  if (winter) for (let x = 148; x < 236; x++) R(x, 2, 1, 1 + (Math.sin(x * 0.9) > 0.3 ? 1 : 0), '#f4f7fd');
+  // живая изгородь вдоль здания
+  for (const [x0, x1] of [[76, 182], [202, 308]]) {
+    R(x0, 164, x1 - x0, 4, season === 'autumn' ? '#5f6a2e' : '#2f6e3d'); R(x0, 167, x1 - x0, 1, '#22502c');
+    for (let x = x0; x < x1; x += 4) { disc(x + 2, 165, 2, season === 'autumn' ? '#6c7836' : '#357a44'); P(x + 1, 164, season === 'autumn' ? '#8d9a48' : '#4f9c5c'); }
+    if (winter) { for (let x = x0; x < x1; x++) R(x, 163, 1, 2 + (Math.sin(x) > 0.5 ? 1 : 0), '#f4f7fd'); continue; }
+    for (let x = x0 + 2; x < x1; x += 5) P(x, 165 + (x % 2), season === 'autumn' ? ['#d06a2c', '#eeb03a', '#9c3f2b'][(x / 5 | 0) % 3] : ['#ffd35c', '#ff9ab8', '#ffffff'][(x / 5 | 0) % 3]);
+  }
+  // скамейка, урна, велопарковка, столбы фонарей
+  furn(22, 158, 28, 5, 3, '#93663f'); for (let x = 25; x < 50; x += 5) R(x, 158, 1, 5, '#7a5236');
+  if (winter) R(22, 158, 28, 2, '#f4f7fd');
+  shell(57, 161, 4, 5, '#4a4560'); R(57, 161, 4, 1, '#6b6585');
+  R(232, 170, 22, 1, '#6b6585'); for (let x = 234; x < 254; x += 6) R(x, 170, 1, 4, '#6b6585');
+  R(236, 171, 12, 1, '#2d2a40'); disc(236, 173, 2, '#2d2a40'); disc(247, 173, 2, '#2d2a40'); P(241, 171, '#ff5c5c');
+  for (const lx of LAMPS) { disc(lx, 174, 1, '#1D1A33'); R(lx, 162, 1, 12, '#2d2a40'); R(lx - 2, 158, 5, 4, '#1D1A33'); R(lx - 1, 159, 3, 2, '#5e5878'); }
+  // снеговик зимой
+  if (winter) { disc(64, 150, 4, '#ffffff'); disc(64, 144, 3, '#ffffff'); P(63, 143, '#1D1A33'); P(65, 143, '#1D1A33'); R(66, 144, 2, 1, '#ff8a3c'); R(61, 147, 7, 1, '#e0453c'); P(64, 149, '#1D1A33'); P(64, 151, '#1D1A33'); line(59, 147, 56, 145, '#6b4a33'); line(69, 147, 72, 145, '#6b4a33'); }
+  // тень от времени суток на улице
+  if (SHADOW[phase]) R(0, 0, W, H, SHADOW[phase]);
+
+  // ---------- здание ----------
+  R(71, 19, 242, 146, '#120f24');
+  R(72, 20, 240, 4, '#2d2248'); R(72, 20, 240, 1, '#4a3a70');
+  R(72, 20, 4, 144, '#3b2d5c'); R(308, 20, 4, 144, '#3b2d5c'); R(75, 24, 1, 134, '#2d2248'); R(308, 24, 1, 134, '#2d2248');
+  R(72, 158, 112, 6, '#3b2d5c'); R(200, 158, 112, 6, '#3b2d5c'); R(72, 158, 112, 1, '#4a3a70'); R(200, 158, 112, 1, '#4a3a70');
+  if (winter) for (let x = 72; x < 312; x++) { R(x, 19, 1, 2 + (Math.sin(x * 0.5) > 0.6 ? 1 : 0), '#f4f7fd'); if (x % 11 === 3) R(x, 21, 1, 2, '#cfe4ff'); }
+  // стена: светлая, с плинтусом и бордюром сверху
+  R(76, 24, 232, 20, '#e2dcf4'); R(76, 24, 232, 1, '#f3f0fb'); R(76, 40, 232, 4, '#c9bfe8'); R(76, 40, 232, 1, '#ad9fd8'); R(76, 43, 232, 1, '#8f80c4');
+  // пол: чилл тёплое дерево, офис светлое дерево (меньше прожилок), кухня плитка
+  for (let y = 44; y < 158; y += 5) {
+    R(76, y, 78, 5, '#a77a52'); R(76, y + 4, 78, 1, '#916744');
+    for (let x = 76 + ((y / 5 | 0) % 3) * 13; x < 154; x += 38) R(x, y, 1, 4, '#916744');
+    R(154, y, 116, 5, '#d0a271'); R(154, y + 4, 116, 1, '#bb8d5e');
+    for (let x = 154 + ((y / 5 | 0) % 4) * 11; x < 270; x += 44) R(x, y, 1, 4, '#bb8d5e');
+  }
+  for (let y = 44; y < 158; y += 8) for (let x = 270; x < 308; x += 8) { R(x, y, 8, 8, '#ebe7f4'); R(x, y + 7, 8, 1, '#d8d2ea'); R(x + 7, y, 1, 8, '#d8d2ea'); }
+  R(153, 44, 1, 114, '#7a5c40'); R(270, 44, 1, 114, '#a99dd4');
+  // нижняя стена поверх пола и проём двери
+  R(72, 158, 112, 6, '#3b2d5c'); R(200, 158, 112, 6, '#3b2d5c'); R(72, 158, 112, 1, '#4a3a70'); R(200, 158, 112, 1, '#4a3a70');
+  R(184, 158, 16, 6, '#d0a271'); R(184, 163, 16, 1, '#bb8d5e');
+  if (winter) { R(72, 158, 112, 2, '#f4f7fd'); R(200, 158, 112, 2, '#f4f7fd'); }
+  // мягкая тень у стен
+  for (let i = 0; i < 4; i++) { const a = (0.16 - i * 0.04).toFixed(2); R(76, 44 + i, 232, 1, `rgba(30,20,60,${a})`); R(76 + i, 44, 1, 114, `rgba(30,20,60,${a})`); R(307 - i, 44, 1, 114, `rgba(30,20,60,${a})`); }
+  // солнце из окон днём
+  if (phase === 'day') for (const wx of WINDOWS) for (let y = 0; y < 22; y++) R(wx + 2 + y * 0.6, 45 + y, 22, 1, `rgba(255,248,215,${(0.16 * (1 - y / 22)).toFixed(3)})`);
+  // ковёр со звёздами
+  R(79, 55, 72, 60, '#2a1f7a'); R(80, 56, 70, 58, '#5b48d6'); R(82, 58, 66, 54, '#3f2fb8');
+  for (let i = 0; i < 70; i++) P(83 + r() * 64, 59 + r() * 52, r() < 0.8 ? '#5b4ad0' : '#8f80ff');
+  R(82, 58, 66, 1, '#7d6ef0');
+  // книжный шкаф с лианой и котом-статуэткой
+  furn(78, 25, 18, 19, 2, '#7a5236'); R(79, 26, 16, 17, '#4f3624');
+  for (let s = 0; s < 3; s++) { R(79, 31 + s * 6, 16, 1, '#7a5236'); for (let k = 0; k < 7; k++) if (!(s === 1 && k > 4)) R(80 + k * 2, 26 + s * 6, 1, 5 - (k % 2), ['#e0745f', '#5cc8ff', '#ffd35c', '#7fe0b4', '#b9a8ff', '#ff9ab8', '#f7f5ff'][(k + s * 3) % 7]); }
+  R(90, 34, 3, 2, '#f7f5ff'); P(90, 33, '#f7f5ff'); P(92, 33, '#f7f5ff'); P(91, 35, '#ff9ab8');
+  vine(79, 24, 18, r); vine(95, 24, 12, r);
+  // телевизор на стене и тумба
+  shell(100, 27, 30, 15, '#14121f'); R(101, 28, 28, 12, '#1d2440'); R(102, 28, 26, 1, '#2c3760');
+  furn(98, 44, 34, 3, 4, '#7a5236'); R(114, 48, 1, 3, '#5b3d2a'); P(106, 49, '#c9a07a'); P(122, 49, '#c9a07a'); R(102, 44, 4, 2, '#2d2a40'); P(126, 45, '#7fe0b4');
+  // постер с фениксом
+  shell(136, 27, 14, 13, '#1D1A33'); R(137, 28, 12, 11, '#2a2150');
+  for (let i = 0; i < 5; i++) { P(142 - i, 31 + i, '#ff8a5c'); P(143 + i, 31 + i, '#ff8a5c'); P(142 - i, 32 + i, '#ffcf5c'); P(143 + i, 32 + i, '#ffcf5c'); }
+  R(142, 30, 2, 7, '#ff5c5c');
+  vine(153, 24, 16, r);
+  // доска задач
+  shell(158, 26, 34, 16, '#1D1A33'); R(159, 27, 32, 14, '#f7f5ff');
+  for (let c = 0; c < 3; c++) { R(160 + c * 10, 28, 9, 1, ['#b9a8ff', '#ffcf5c', '#7fe0b4'][c]); for (let k = 0; k < 3 - (c === 2 ? 0 : c); k++) R(161 + c * 10, 30 + k * 3, 6, 2, ['#ffcf5c', '#7fe0b4', '#ff9ab8', '#9cc8ff'][(c + k) % 4]); }
+  // окна с небом и городом
+  const sky = (wetSeason() || winter) && phase !== 'night' ? SKY_GREY[phase] : SKY[phase];
+  for (const wx of WINDOWS) {
+    R(wx - 1, 25, 28, 18, '#120f24'); R(wx, 26, 26, 16, '#1D1A33');
+    for (let y = 0; y < 14; y++) R(wx + 1, 27 + y, 24, 1, sky[Math.min(2, y / 5 | 0)]);
+    if (phase === 'night') for (let i = 0; i < 4; i++) P(wx + 2 + r() * 22, 28 + r() * 8, '#ffffff');
+    if (phase === 'day' && !wetSeason() && !winter) { R(wx + 4, 30, 8, 2, '#ffffff'); R(wx + 6, 29, 4, 1, '#ffffff'); }
+    if (phase === 'day' && (wetSeason() || winter)) { R(wx + 2, 29, 12, 2, '#d5dbe6'); R(wx + 14, 31, 9, 2, '#c9d0de'); }
+    for (let x = 0; x < 24; x++) {
+      const h = 3 + Math.round(4 * Math.abs(Math.sin((x + wx) / 4)));
+      R(wx + 1 + x, 41 - h, 1, h, phase === 'day' ? (x % 6 < 3 ? '#6f84b8' : '#8094c4') : '#221c45');
+      if (winter) P(wx + 1 + x, 41 - h, '#f4f7fd');
+      if (x % 3 === 1 && h > 3) P(wx + 1 + x, 41 - h + 2, phase === 'day' ? '#c4e2f6' : '#ffd98a');
+    }
+    R(wx + 12, 26, 2, 16, '#1D1A33'); R(wx - 1, 42, 28, 2, '#f3f0fb'); R(wx - 1, 43, 28, 1, '#c9bfe8');
+    for (const px of [wx + 3, wx + 21]) { R(px - 1, 40, 3, 2, '#b5643c'); P(px - 1, 39, '#3d8a4c'); P(px + 1, 39, '#58a865'); P(px, 38, season === 'spring' ? '#ff9ab8' : '#3d8a4c'); }
+  }
+  // часы
+  disc(262, 32, 6, '#120f24'); disc(262, 32, 5, '#1D1A33'); disc(262, 32, 4, '#ffffff');
+  for (const [dx, dy] of [[0, -3], [3, 0], [0, 3], [-3, 0]]) P(262 + dx, 32 + dy, '#b9b2d6');
+  vine(268, 24, 14, r);
+  // кухня: шкафчики, тёмная столешница с техникой, холодильник с магнитами, кулер
+  shell(272, 25, 34, 11, '#f3f0fb'); R(272, 35, 34, 1, '#c9c1e6'); for (let x = 280; x < 306; x += 8) { R(x, 25, 1, 10, '#d8d0ec'); R(x - 2, 29, 1, 3, '#9a8fb8'); }
+  furn(272, 44, 34, 3, 5, '#5b5670'); R(272, 47, 34, 5, '#e9e5f3'); R(272, 47, 34, 1, '#c9c1e6'); for (let x = 280; x < 306; x += 8) { R(x, 47, 1, 5, '#cfc8e6'); P(x - 2, 49, '#9a8fb8'); }
+  shell(275, 38, 9, 9, '#2d2a40'); R(276, 39, 7, 3, '#141220'); P(282, 43, '#ff5c5c'); R(278, 44, 3, 2, '#f7f5ff');
+  shell(288, 44, 8, 3, '#9ca3b8'); R(289, 45, 6, 1, '#6c7388'); P(291, 43, '#c9cfdc');
+  shell(298, 38, 8, 6, '#cfd3e0'); R(299, 39, 5, 4, '#2a2838'); P(305, 40, '#7fe0b4');
+  shell(298, 56, 9, 21, '#e6e9f2'); R(298, 56, 9, 1, '#ffffff'); R(298, 66, 9, 1, '#b8bfd0'); R(299, 60, 1, 4, '#9ca3b8'); R(299, 69, 1, 4, '#9ca3b8');
+  R(302, 58, 2, 2, '#ffcf5c'); P(305, 61, '#ff9ab8'); R(302, 63, 2, 2, '#5cc8ff'); P(305, 70, '#7fe0b4');
+  shell(300, 82, 7, 11, '#d9dde8'); R(300, 77, 7, 6, '#4aa8ff'); R(301, 77, 5, 6, '#7fc8ff'); R(301, 77, 1, 5, '#c8e8ff'); P(300, 86, '#5cc8ff'); P(300, 88, '#ff5c5c');
+  // коврик под кухонным столом
+  disc(294, 119, 11, '#cdbfa8', 0.6); disc(294, 119, 10, '#dccfb8', 0.6); disc(294, 119, 7, '#d3c5ad', 0.6);
+  // бра на левой стене
+  R(77, 60, 2, 3, '#4a3a70'); P(78, 59, '#ffe7a3');
+  // низкая полка у аркады с книгами и лампой
+  furn(97, 125, 18, 2, 7, '#7a5236'); R(98, 128, 16, 4, '#4f3624');
+  for (let k = 0; k < 5; k++) R(99 + k * 2, 128, 1, 4, ['#e0745f', '#5cc8ff', '#ffd35c', '#b9a8ff', '#7fe0b4'][k]);
+  R(110, 128, 3, 4, '#2d2a40'); R(111, 121, 2, 3, '#ffe7a3'); R(111, 124, 2, 1, '#6b4a33');
+  bigPlant(101, 125, 7, r);
+  // коврик и лежанка кота
+  R(123, 119, 17, 9, '#6a5a88'); R(124, 120, 15, 7, '#8a7aa8'); for (let x = 124; x < 139; x += 2) { P(x, 118, '#6a5a88'); P(x, 128, '#6a5a88'); }
+  // торшер у дивана
+  disc(82, 104, 2, '#2d2a40', 0.6); R(82, 92, 1, 12, '#2d2a40'); shell(80, 89, 5, 3, '#ffe2a0');
+  // растения в кадках
+  bigPlant(149, 54, 10, r); bigPlant(160, 157, 10, r); bigPlant(266, 157, 11, r); bigPlant(303, 157, 12, r, '#b5643c'); bigPlant(278, 157, 8, r);
+  cur = g;
+}
+
+// ---------- деревья: спрайты по сезону, качаются от ветра ----------
+let treeSprites = [];
+function buildTrees() {
+  treeSprites = TREES.map(([cx, cy, s], i) => {
+    const pad = s + 6, c = document.createElement('canvas'); c.width = c.height = pad * 2;
+    const t2 = c.getContext('2d'); cur = t2;
+    const r = rng(100 + i), L = LOOK[season];
+    if (season !== 'winter') disc(pad + 3, pad + 4, s, 'rgba(0,0,0,0.22)');
+    if (!L.leaf) {
+      // голые ветки со снегом
+      disc(pad, pad, 2, '#5a3d2b');
+      for (let k = 0; k < 7; k++) {
+        const a = k / 7 * 6.28 + r() * 0.5, len = s * (0.6 + r() * 0.4);
+        const ex = pad + Math.cos(a) * len, ey = pad + Math.sin(a) * len;
+        line(pad, pad, ex, ey, '#5a3d2b');
+        const mx = pad + Math.cos(a) * len * 0.6, my = pad + Math.sin(a) * len * 0.6;
+        line(mx, my, mx + Math.cos(a + 0.7) * len * 0.35, my + Math.sin(a + 0.7) * len * 0.35, '#6b4a33');
+        for (let q = 0; q < 4; q++) { const d = r() * len; P(pad + Math.cos(a) * d, pad + Math.sin(a) * d - 1, '#ffffff'); }
+      }
+    } else {
+      disc(pad, pad, s + 1, shade(L.leaf[0], 0.6)); disc(pad, pad, s, L.leaf[0]);
+      for (let k = 0; k < 5; k++) { const a = k / 5 * 6.28 + 0.4, d2 = s * 0.45; disc(pad + Math.cos(a) * d2 - 1, pad + Math.sin(a) * d2 - 1, Math.max(2, s * 0.45 | 0), L.leaf[1]); }
+      disc(pad - 2, pad - 2, Math.max(2, s - 5), L.leaf[1]); disc(pad - 3, pad - 3, Math.max(2, s - 7), L.leaf[2]);
+      for (let k = 0; k < 4; k++) { const a = k / 4 * 6.28 + 1, d2 = s * 0.5; disc(pad + Math.cos(a) * d2 - 2, pad + Math.sin(a) * d2 - 2, 1, shade(L.leaf[2], 1.12)); }
+      for (let k = 0; k < s * 3; k++) { const a = r() * 6.28, d = r() * (s - 1); P(pad + Math.cos(a) * d, pad + Math.sin(a) * d, r() < 0.5 ? shade(L.leaf[0], 0.9) : L.leaf[2]); }
+      if (L.bloom) for (let k = 0; k < s * 2; k++) { const a = r() * 6.28, d = r() * (s - 1); P(pad + Math.cos(a) * d, pad + Math.sin(a) * d, L.bloom[r() * 2 | 0]); }
+      if (season === 'autumn') for (let k = 0; k < s; k++) { const a = r() * 6.28, d = r() * (s - 1); P(pad + Math.cos(a) * d, pad + Math.sin(a) * d, '#ffd35c'); }
+    }
+    if (SHADOW[phase]) { t2.globalCompositeOperation = 'source-atop'; t2.fillStyle = SHADOW[phase]; t2.fillRect(0, 0, c.width, c.height); }
+    cur = g;
+    return { c, x: cx - pad, y: cy - pad, seed: i * 1.7 };
+  });
+}
+
+// ---------- ветер, погода, мерцание ----------
+let gust = 0;
+function windNow(t) {
+  const k = season === 'autumn' ? 1.25 : 1;
+  gust = Math.min(1, k * Math.max(0, 0.25 + 0.75 * Math.sin(t * 0.21) * Math.sin(t * 0.077 + 1)));
+  return gust;
+}
+function flicker(t) {
+  const noise = (Math.sin(t * 17.3) + Math.sin(t * 29.1 + 1) + 2) / 4;
+  const dip = (t * 0.7) % 13 < 0.09 ? 0.35 : 0;
+  return Math.max(0.45, 1 - gust * 0.3 * noise - dip);
+}
+const streaks = [];
+let streakAcc = 0;
+function windStep(dt) {
+  streakAcc += dt * (0.5 + gust * 2.4) * (season === 'autumn' ? 1.4 : 1);
+  while (streakAcc > 1) {
+    streakAcc--;
+    if (streaks.length >= 12) continue;
+    const top = Math.random() < 0.6;
+    streaks.push({ x: -10 - Math.random() * 30, y: top ? rand(2, 17) : rand(24, 158), len: rand(16, 42), v: rand(70, 130), amp: rand(0.6, 2.4), ph: rand(0, 6), fr: rand(0.1, 0.22) });
+  }
+  for (const s of streaks) s.x += s.v * dt * (0.6 + gust * 0.8);
+  for (let i = streaks.length - 1; i >= 0; i--) if (streaks[i].x - streaks[i].len > W) streaks.splice(i, 1);
+}
+function drawStreaks(t) {
+  const night = phase !== 'day', col = night ? '170,215,255' : '255,255,255', base = night ? 0.75 : 0.62;
+  for (const s of streaks) for (let i = 0; i < s.len; i++) {
+    const px = Math.round(s.x - i);
+    if (px < 0 || px >= W) continue;
+    const py = Math.round(s.y + Math.sin(px * s.fr + s.ph + t * 2) * s.amp);
+    if (inBuilding(px, py) || inSign(px, py)) continue;          // линия проходит за зданием
+    const a = base * (1 - i / s.len) * Math.min(1, i / 3 + 0.3);
+    g.fillStyle = `rgba(${col},${a.toFixed(2)})`; g.fillRect(px, py, 1, 1);
+    if (night) { g.fillStyle = `rgba(${col},${(a * 0.25).toFixed(2)})`; g.fillRect(px, py - 1, 1, 1); g.fillRect(px, py + 1, 1, 1); }
+  }
+}
+// подсветка за зданием: мягкое свечение над крышей, мерцает от порывов
+function drawBacklight(t) {
+  const f = flicker(t), a = (phase === 'night' ? 0.42 : phase === 'dusk' ? 0.3 : 0.14) * f;
+  g.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 8; i++) { g.fillStyle = `rgba(140,110,255,${(a * (1 - i / 8) * 0.6).toFixed(3)})`; g.fillRect(66 - i, 19 - i, 252 + i * 2, 1); }
+  for (let i = 0; i < 5; i++) { g.fillStyle = `rgba(140,110,255,${(a * (1 - i / 5) * 0.35).toFixed(3)})`; g.fillRect(71 - i, 20, 1, 140); g.fillRect(312 + i, 20, 1, 140); }
+  // неон вывески
+  g.fillStyle = `rgba(125,110,240,${(0.55 * f).toFixed(2)})`; g.fillRect(148, 2, 88, 1); g.fillRect(148, 19, 88, 1); g.fillRect(147, 3, 1, 16); g.fillRect(236, 3, 1, 16);
+  g.globalCompositeOperation = 'source-over';
+}
+
+const drops = [], splashes = [], ripples = [];
+function weatherK(t) { return 0.55 + 0.45 * Math.sin(t / 70); }     // сила дождя или снега плавно меняется, но не пропадает
+function weatherStep(dt, t) {
+  const k = weatherK(t), maxN = { summer: 150, winter: 130, autumn: 28, spring: 30 }[season];
+  const want = Math.round(maxN * (season === 'autumn' || season === 'spring' ? 1 : k));
+  while (drops.length < want) drops.push(newDrop(true));
+  if (drops.length > want) drops.length = want;
+  for (const d of drops) {
+    if (season === 'summer') {
+      d.y += d.v * dt; d.x += gust * 40 * dt;
+      if (d.y > d.end) { if (!inBuilding(d.x, d.end)) splashes.push({ x: d.x, y: d.end, life: 0.18 }); Object.assign(d, newDrop(false)); }
+    } else if (season === 'winter') {
+      d.y += d.v * dt; d.x += (Math.sin(t * 1.3 + d.ph) * 6 + gust * 16) * dt;
+      if (d.y > H + 2 || d.x > W + 4) Object.assign(d, newDrop(false));
+    } else {
+      d.x += (25 + gust * 70) * dt * d.v / 20; d.y += (8 + Math.sin(t * 2 + d.ph) * 14) * dt;
+      if (d.x > W + 4 || d.y > H + 4) Object.assign(d, newDrop(false), { x: -4, y: rand(0, H) });
+    }
+  }
+  for (const s of splashes) s.life -= dt;
+  for (let i = splashes.length - 1; i >= 0; i--) if (splashes[i].life <= 0) splashes.splice(i, 1);
+  if (season === 'summer') {
+    if (Math.random() < dt * 6 * k) { const [x, y, s] = pick(PUDDLES); ripples.push({ x: x + rand(-s + 2, s - 2), y: y + rand(-1, 1), r: 0 }); }
+    for (const q of ripples) q.r += dt * 5;
+    for (let i = ripples.length - 1; i >= 0; i--) if (ripples[i].r > 3.5) ripples.splice(i, 1);
+  } else ripples.length = 0;
+}
+function newDrop(first) {
+  const x = rand(-40, W), y = first ? rand(0, H) : rand(-30, -4);
+  if (season === 'summer') return { x, y, v: rand(170, 230), end: rand(0, H) };
+  if (season === 'winter') return { x, y, v: rand(10, 26), ph: rand(0, 6), big: Math.random() < 0.18 };
+  return { x: rand(0, W), y: rand(0, H), v: rand(14, 28), ph: rand(0, 6), col: season === 'autumn' ? pick(['#d06a2c', '#eeb03a', '#9c3f2b', '#e0745f']) : pick(['#ffb3cf', '#ffd6e6', '#ffffff']) };
+}
+function drawWeather(t) {
+  const night = phase === 'night';
+  if (season === 'summer') {
+    g.fillStyle = night ? 'rgba(150,175,235,0.5)' : 'rgba(205,225,255,0.6)';
+    const sx = gust * 0.7;
+    for (const d of drops) {
+      const x = Math.round(d.x), y = Math.round(d.y);
+      for (let i = 0; i < 4; i++) { const px = Math.round(x - sx * i), py = y - i; if (!inBuilding(px, py) || inWindow(px, py)) g.fillRect(px, py, 1, 1); }
+    }
+    g.fillStyle = 'rgba(220,235,255,0.7)';
+    for (const s of splashes) { g.fillRect(Math.round(s.x) - 1, Math.round(s.y), 1, 1); g.fillRect(Math.round(s.x) + 1, Math.round(s.y), 1, 1); }
+    g.fillStyle = 'rgba(200,220,255,0.45)';
+    for (const q of ripples) { const rr = Math.round(q.r); g.fillRect(Math.round(q.x) - rr, Math.round(q.y), 1, 1); g.fillRect(Math.round(q.x) + rr, Math.round(q.y), 1, 1); if (rr > 1) { g.fillRect(Math.round(q.x), Math.round(q.y) - 1, 1, 1); } }
+  } else if (season === 'winter') {
+    for (const d of drops) {
+      const x = Math.round(d.x), y = Math.round(d.y);
+      if (inBuilding(x, y) && !inWindow(x, y)) continue;
+      g.fillStyle = d.big ? '#ffffff' : 'rgba(255,255,255,0.8)';
+      g.fillRect(x, y, d.big ? 2 : 1, d.big ? 2 : 1);
+    }
+  } else {
+    for (const d of drops) {
+      const x = Math.round(d.x), y = Math.round(d.y);
+      if (inBuilding(x, y) && !inWindow(x, y)) continue;
+      g.fillStyle = d.col;
+      if ((t * 4 + d.ph | 0) % 2) g.fillRect(x, y, 2, 1); else g.fillRect(x, y, 1, 2);
+    }
+  }
+}
+
+// ---------- агенты ----------
+const KIND = {
+  claude:      { head: '#e8956b', body: '#cf6f47', acc: '#ffe2cf', eye: '#fff4e6', short: 'CLAUDE' },
+  'claude-app':{ head: '#f2c29e', body: '#b5653f', acc: '#fff1e4', eye: '#fff4e6', short: 'CLAUDE' },
+  codex:       { head: '#ececf2', body: '#2c2c38', acc: '#7fdcff', eye: '#7fdcff', short: 'CODEX' },
+  chatgpt:     { head: '#25c48a', body: '#0f7a52', acc: '#eafff5', eye: '#eafff5', short: 'GPT' },
+};
+const agents = new Map();
+const IDLE_TO_CHILL = FAST ? 6 : 40;                           // секунд без работы, после которых агент идёт отдыхать
+const IDLE_TO_SLEEP = 300;                           // на диване после стольких секунд засыпает
+const breakGap = () => FAST ? rand(10, 20) : rand(180, 480);       // как часто работающий агент ходит за кофе или чаем
+
+function newAgent(s) {
+  const t = performance.now() / 1000;
+  const a = { id: s.id, kind: KIND[s.kind] ? s.kind : 'claude', name: s.name, status: s.status, tool: s.tool || '', tagNo: 1,
+    place: streetPlace(), x: 0, y: 176, path: [], pending: null, desk: null, spot: null, leaving: false, brk: null,
+    nextBreak: t + (FAST ? 8 : rand(90, 240)), nextSay: t + rand(4, 10), say: null, greeted: false,
+    dir: 'down', ph: Math.random() * 6, idleSince: s.status === 'idle' ? t : null };
+  a.x = spotOf(a.place).x;
+  agents.set(s.id, a);
+  return a;
+}
+function routeTo(a, place) {
+  if (a.path.length) { a.pending = place; return; }
+  const from = a.place, pts = [...from.entry].reverse().slice(1);
+  if (from.lane !== place.lane) pts.push({ x: V, y: from.lane }, { x: V, y: place.lane });
+  pts.push(...place.entry);
+  a.path = pts; a.place = place; a.pending = null;
+}
+function wanted(a, t) {
+  if (a.leaving) return a.leavePlace;
+  if (!a.desk) { a.desk = DESKS.find(d => !d.owner) || null; if (a.desk) a.desk.owner = a; }
+  if (a.brk) return a.brk.spot;
+  const rest = a.status === 'idle' && a.idleSince !== null && t - a.idleSince > IDLE_TO_CHILL;
+  if (!rest && a.desk) { if (a.spot) { a.spot.owner = null; a.spot = null; } return a.desk; }
+  if (!a.spot) { a.spot = CHILL.find(s => !s.owner) || null; if (a.spot) a.spot.owner = a; }
+  return a.spot || a.desk || a.place;
+}
+function endBreak(a, t) {
+  if (!a.brk) return;
+  a.brk.spot.owner = null; a.brk = null; a.nextBreak = t + breakGap();
+}
+function leave(a) {
+  a.leaving = true; a.leavePlace = streetPlace();
+  if (a.desk) { a.desk.owner = null; a.desk = null; }
+  if (a.spot) { a.spot.owner = null; a.spot = null; }
+  if (a.brk) { a.brk.spot.owner = null; a.brk = null; }
+  say(a, pick(LINES.bye), performance.now() / 1000, true);
+}
+// иногда агент встаёт из-за стола и идёт за кофе или чаем
+function breakTick(a, t) {
+  if (a.leaving) return;
+  if (a.brk) {
+    const there = arrived(a) && a.place === a.brk.spot;
+    if (there && !a.brk.until) { a.brk.until = t + rand(10, 18); say(a, pick(LINES[a.brk.spot.act]), t, true); }
+    if (a.status === 'waiting' || (a.brk.until && t > a.brk.until)) endBreak(a, t);
+    return;
+  }
+  if (t < a.nextBreak) return;
+  if (!(a.desk && arrived(a) && a.place === a.desk && a.status !== 'waiting')) { a.nextBreak = t + 15; return; }
+  const free = BREAK_SPOTS.filter(s => !s.owner);
+  if (!free.length) { a.nextBreak = t + 30; return; }
+  const spot = pick(free); spot.owner = a;
+  a.brk = { spot, until: 0 };
+}
+
+function sync(list) {
+  const t = performance.now() / 1000, seen = new Set();
+  for (const s of list) {
+    seen.add(s.id);
+    const a = agents.get(s.id) || newAgent(s);
+    a.name = s.name; a.tool = s.tool || '';
+    if (a.status !== s.status) { a.status = s.status; a.idleSince = s.status === 'idle' ? t : null; if (s.status === 'waiting') say(a, pick(LINES.wait), t, true); }
+    a.leaving = false;
+  }
+  for (const a of agents.values()) if (!seen.has(a.id) && !a.leaving) leave(a);
+  // номера, если открыто несколько одинаковых
+  const count = {};
+  for (const a of [...agents.values()].filter(x => !x.leaving)) { count[a.kind] = (count[a.kind] || 0) + 1; a.tagNo = count[a.kind]; }
+}
+
+function step(dt, t) {
+  for (const a of [...agents.values()]) {
+    a.ph += dt;
+    breakTick(a, t);
+    if (!a.path.length) {
+      const want = a.pending || wanted(a, t);
+      if (want !== a.place) routeTo(a, want);
+      else if (a.leaving) { agents.delete(a.id); continue; }
+      if (!a.path.length) { a.dir = a.place.face || 'down'; }
+    }
+    if (a.path.length) {
+      const p = a.path[0], dx = p.x - a.x, dy = p.y - a.y, d = Math.hypot(dx, dy), v = 34 * dt;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) a.dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+      if (d <= v) { a.x = p.x; a.y = p.y; a.path.shift(); } else { a.x += dx / d * v; a.y += dy / d * v; }
+    }
+    if (!a.greeted && arrived(a) && a.place === a.desk) { a.greeted = true; say(a, pick(phase === 'night' ? LINES.helloNight : LINES.hello), t, false); }
+    chatTick(a, t);
+  }
+}
+const arrived = a => !a.path.length && !a.pending;
+const sitting = a => arrived(a) && !!a.place.sit;
+function activity(a, t) {
+  if (a.leaving || !arrived(a)) return 'walk';
+  if (a.brk) return a.brk.spot.act;
+  if (a.place.desk) return a.status === 'working' ? 'work' : a.status === 'waiting' ? 'wait' : 'desk';
+  if (a.status === 'waiting') return 'wait';
+  if (a.place.act === 'tv' && a.idleSince !== null && t - a.idleSince > IDLE_TO_SLEEP) return 'sleep';
+  return a.place.act || 'desk';
+}
+const ACT_UA = { work: 'працює', wait: 'чекає на тебе', desk: 'на місці', walk: 'йде', coffee: "п'є каву", tea: "п'є чай",
+  tv: 'дивиться графіки', music: 'слухає музику', game: 'грає в аркаду', phone: 'в телефоні', sleep: 'дрімає' };
+
+// ---------- реплики на украинском ----------
+const LINES = {
+  hello: ['Привіт!', 'Доброго дня!', 'Я на місці'], helloNight: ['Доброї ночі!', 'Нічна зміна'],
+  bye: ['Бувай!', 'До зустрічі!', 'Па-па!'],
+  work: ['Пишу код…', 'Ще трохи', 'Майже готово', 'Хм, цікаво', 'Тести зелені!', 'Рефакторю'],
+  Bash: ['Запускаю команду', 'Термінал на зв’язку'], Edit: ['Правлю файл', 'Одна правка'], MultiEdit: ['Правлю файл'], Write: ['Створюю файл'],
+  Read: ['Читаю код'], Grep: ['Шукаю…'], Glob: ['Шукаю файли'], WebSearch: ['Гуглю…'], WebFetch: ['Читаю сайт'], Task: ['Кличу помічника'], Agent: ['Кличу помічника'],
+  wait: ['Глянь, будь ласка', 'Потрібна твоя відповідь', 'Чекаю на тебе'],
+  coffee: ['Кава!', 'Перерва на каву', 'Ще одну каву'], tea: ['Час на чай', 'Чай з лимоном', 'Гарячий чай'],
+  tv: ['Графік росте', 'Дивлюсь ринок'], game: ['Ще рівень!', 'Рекорд!', 'Майже пройшов'], music: ['Гарна пісня', 'Відпочиваю'],
+  phone: ['Гортаю новини'], sleep: ['Хррр…'], desk: ['Чекаю задачу', 'Що далі?'],
+  winter: ['Сніжно сьогодні', 'Холодно!'], summer: ['Знову дощ', 'Пахне дощем'], autumn: ['Вітер сильний', 'Листопад…'], spring: ['Весна!', 'Квіти цвітуть'],
+};
+const MAX_BUBBLES = 2;
+function say(a, s, t, force) {
+  const busy = [...agents.values()].filter(x => x !== a && x.say && x.say.until > t).length;
+  if (!force && busy >= MAX_BUBBLES) return;
+  a.say = { text: s, until: t + 4 }; a.nextSay = t + (FAST ? rand(5, 9) : rand(25, 60));
+}
+function chatTick(a, t) {
+  if (a.say && a.say.until < t) a.say = null;
+  if (a.say || t < a.nextSay || a.leaving || !arrived(a)) return;
+  const act = activity(a, t);
+  let pool = act === 'work' ? (LINES[a.tool] && Math.random() < 0.6 ? LINES[a.tool] : LINES.work) : LINES[act] || LINES.desk;
+  if ((act === 'desk' || act === 'tv' || act === 'coffee' || act === 'tea') && Math.random() < 0.25) pool = LINES[season];
+  say(a, pick(pool), t, false);
+}
+
+// ---------- рисование агента и значков ----------
+function drawBot(a, t) {
+  const k = KIND[a.kind], x = Math.round(a.x), y = Math.round(a.y), sit = sitting(a), dir = a.dir;
+  const top = y - 11 + (sit ? 2 : 0);
+  const head = k.head, hl = shade(head, 1.15), hd = shade(head, 0.78), body = k.body, bl = shade(body, 1.25), bd = shade(body, 0.75);
+  const walking = a.path.length > 0, act = activity(a, t);
+  const working = act === 'work', waiting = act === 'wait';
+  if (!sit) R(x - 3, y, 7, 1, 'rgba(0,0,0,0.28)');
+  P(x, top, working && (t * 4 | 0) % 2 ? '#ffffff' : k.acc); P(x, top + 1, hd);
+  // голова
+  R(x - 3, top + 2, 7, 5, head); R(x - 3, top + 2, 7, 1, hl); R(x - 3, top + 6, 7, 1, hd);
+  const blink = act === 'sleep' || (a.ph % 3.7) < 0.12, eye = waiting ? '#ffcf5c' : k.eye;
+  if (dir === 'down') { R(x - 2, top + 3, 5, 2, '#1D1A33'); if (!blink) { P(x - 1, top + 3, eye); P(x + 1, top + 3, eye); } }
+  else if (dir === 'left') { R(x - 3, top + 3, 3, 2, '#1D1A33'); if (!blink) P(x - 2, top + 3, eye); }
+  else if (dir === 'right') { R(x + 1, top + 3, 3, 2, '#1D1A33'); if (!blink) P(x + 2, top + 3, eye); }
+  else { R(x - 1, top + 4, 3, 1, hd); }
+  // тело и руки
+  R(x - 3, top + 7, 7, 4, body); R(x - 3, top + 7, 7, 1, bl);
+  if (dir === 'down') P(x, top + 8, k.acc);
+  const tap = working ? ((t * 9 + a.ph) | 0) % 2 : 0;
+  const swing = walking ? ((a.ph * 8) | 0) % 2 : 0;
+  if (waiting) { R(x - 4, top + 7, 1, 3, bd); R(x + 4, top + 1 - ((t * 3 | 0) % 2), 1, 5, bd); }
+  else { R(x - 4, top + 7 - tap + swing, 1, 3, bd); R(x + 4, top + 7 - (working ? 1 - tap : 0) + (walking ? 1 - swing : 0), 1, 3, bd); }
+  // кружка в руке
+  if (act === 'coffee' || act === 'tea') {
+    const cx = dir === 'left' ? x - 6 : x + 5, cy = top + 7 + ((t * 0.5 + a.ph) % 3 < 0.5 ? -2 : 0);
+    R(cx, cy, 2, 2, act === 'coffee' ? '#f7f5ff' : '#ffcf5c'); P(cx + (dir === 'left' ? -1 : 2), cy, '#d8d0f0');
+    if ((t * 3 | 0) % 2) P(cx, cy - 2, 'rgba(255,255,255,0.7)'); else P(cx + 1, cy - 3, 'rgba(255,255,255,0.5)');
+  }
+  if (act === 'phone') { R(x + 4, top + 7, 2, 3, '#1D1A33'); P(x + 4, top + 8, (t * 2 | 0) % 2 ? '#5cc8ff' : '#7fe0b4'); }
+  if (!sit) {
+    const f = walking ? ((a.ph * 8) | 0) % 2 : 2;
+    if (f !== 0) R(x - 2, top + 11, 2, 1, '#2a2540');
+    if (f !== 1) R(x + 1, top + 11, 2, 1, '#2a2540');
+  }
+}
+
+// маленькие значки 7x5 в белом облачке: что агент сейчас делает
+const ICON = {
+  term:   ['#####..', '#.#....', '#..#...', '#.#....', '#...###'],
+  pencil: ['.....##', '....##.', '...##..', '.###...', '##.....'],
+  lens:   ['.###...', '#...#..', '#...#..', '.###...', '....##.'],
+  cup:    ['.#.#...', '#####..', '#####.#', '######.', '.###...'],
+  pad:    ['.#####.', '#.#.#.#', '###.###', '#.#.#.#', '.#####.'],
+  chart:  ['......#', '.....#.', '.#.##..', '#.#....', '#######'],
+  note:   ['...###.', '...#.#.', '...#.#.', '.###.#.', '.##.##.'],
+  phone:  ['.###...', '.#.#...', '.###...', '.###...', '.###...'],
+};
+const ICON_COL = { term: '#1D1A33', pencil: '#cf6f47', lens: '#4A37C9', cup: '#8a5f3f', pad: '#ff5aa0', chart: '#137A4F', note: '#4A37C9', phone: '#1D1A33' };
+const TOOL_ICON = { Bash: 'term', Edit: 'pencil', MultiEdit: 'pencil', Write: 'pencil', NotebookEdit: 'pencil', Read: 'lens', Grep: 'lens', Glob: 'lens', WebSearch: 'lens', WebFetch: 'lens' };
+function chip(name, bx, by) {
+  R(bx, by, 9, 7, '#f7f5ff'); P(bx, by + 7, '#f7f5ff'); P(bx + 1, by + 7, '#f7f5ff');
+  const rows = ICON[name], col = ICON_COL[name];
+  for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 7; xx++) if (rows[yy][xx] === '#') P(bx + 1 + xx, by + 1 + yy, col);
+}
+function drawLabel(a, t) {
+  const k = KIND[a.kind], x = Math.round(a.x), y = Math.round(a.y), top = y - 11 + (sitting(a) ? 2 : 0);
+  const name = k.short + (a.tagNo > 1 ? a.tagNo : '');
+  const sofa = arrived(a) && a.place.sit && !a.place.desk && a.place.lane === 82;
+  const ly = top - 8 - (sofa && CHILL.indexOf(a.place) % 2 ? 6 : 0);
+  a.labelY = ly;
+  tag(name, x - textW(name) / 2, ly, k.head);
+  if (!arrived(a)) return;
+  const bx = x + 5, by = top - 2, act = activity(a, t);
+  if (act === 'wait') {
+    if ((t * 2 | 0) % 2) { R(bx, by, 7, 8, '#ffcf5c'); R(bx + 1, by - 1, 5, 10, '#ffcf5c'); R(bx + 3, by + 1, 1, 4, '#1D1A33'); P(bx + 3, by + 6, '#1D1A33'); }
+  } else if (act === 'work') {
+    const ic = TOOL_ICON[a.tool];
+    if (ic) chip(ic, bx, by);
+    else {
+      R(bx, by, 10, 6, '#f7f5ff'); P(bx, by + 6, '#f7f5ff'); P(bx + 1, by + 6, '#f7f5ff');
+      const n = (t * 3 | 0) % 4;
+      for (let i = 0; i < n; i++) P(bx + 2 + i * 2, by + 3, '#1D1A33');
+    }
+  } else if (act === 'sleep') {
+    const c = (t * 0.7 + a.ph) % 3;
+    if (c < 2) text('Z', bx + c, by - c * 2, `rgba(240,236,255,${(1 - c / 2).toFixed(2)})`);
+  } else if (act === 'coffee' || act === 'tea') chip('cup', bx, by - ((t * 2 | 0) % 2));
+  else if (act === 'game') chip('pad', bx, by - ((t * 4 | 0) % 2));
+  else if (act === 'tv') chip('chart', bx, by);
+  else if (act === 'music') chip('note', bx, by - ((t * 2 | 0) % 2));
+  else if (act === 'phone') chip('phone', bx, by);
+}
+
+// ---------- столы и лампы ----------
+function lampStep(dt, t) {
+  for (const d of DESKS) {
+    const o = d.owner, here = o && arrived(o) && o.place === d;
+    const want = here ? 1 : 0;
+    if (want && !d.lamp) { if (!d.lampOn) d.lampOn = t + 0.5; if (t >= d.lampOn) { d.lamp = 1; d.lampAt = t; d.lampOn = 0; } }
+    else if (!want && d.lamp) { if (!d.lampOn) d.lampOn = t + 1.2; if (t >= d.lampOn) { d.lamp = 0; d.lampOn = 0; } }
+    else d.lampOn = 0;
+  }
+}
+const lampLit = (d, t) => d.lamp && !(t - d.lampAt < 0.45 && (t * 16 | 0) % 3 === 0);   // при включении лампа пару раз моргает
+function drawDesk(d, t) {
+  const { x0, y0, cx } = d, o = d.owner, here = o && arrived(o) && o.place === d;
+  // стол: столешница, передняя грань, тумба с ящиками
+  R(x0 + 1, y0 + 14, 24, 2, 'rgba(0,0,0,0.2)');
+  furn(x0, y0, 24, 10, 3, '#cf9563');
+  shell(x0 + 17, y0 + 10, 6, 4, '#a49cc4'); R(x0 + 19, y0 + 11, 2, 1, '#e8e4f8'); R(x0 + 19, y0 + 13, 2, 1, '#e8e4f8');
+  // монитор на ножке
+  R(cx - 2, y0 + 3, 5, 1, '#2d2a40'); R(cx, y0 + 1, 1, 2, '#2d2a40');
+  R(x0 + 4, y0 - 8, 16, 10, '#0d0b18'); R(x0 + 5, y0 - 7, 14, 8, '#1D1A33');
+  const sx = x0 + 6, sy = y0 - 6, sw = 12, sh = 6;
+  if (here && o.status === 'working') {
+    R(sx, sy, sw, sh, '#0e1630');
+    const rr = rng((t * 3 | 0) * 13 + cx);
+    for (let i = 0; i < 3; i++) R(sx + 1 + (i === 1 ? 2 : 0), sy + 1 + i * 2, 2 + (rr() * 8 | 0), 1, [KIND[o.kind].head, '#8ff7ff', '#f7f5ff'][i]);
+  } else if (here && o.status === 'waiting') {
+    R(sx, sy, sw, sh, (t * 2 | 0) % 2 ? '#ffcf5c' : '#5c4a1f'); R(sx + 5, sy + 1, 2, 2, '#1D1A33'); R(sx + 5, sy + 4, 2, 1, '#1D1A33');
+  } else if (here || (o && o.brk)) {
+    // на месте или ушёл за кофе: на экране график
+    R(sx, sy, sw, sh, '#0e1630');
+    for (let i = 0; i < 11; i++) P(sx + i, sy + 4 - Math.round(1.5 + Math.sin(i * 0.9 + (cx % 5)) * 1.4 + i * 0.1), i > 7 ? '#7fe0b4' : '#5cc8ff');
+  } else {
+    R(sx, sy, sw, sh, '#15131f'); for (let i = 0; i < 4; i++) P(sx + 7 + i, sy + 3 - i, '#25223a'); P(sx + 11, sy + 5, '#5cc8ff');
+  }
+  P(x0 + 18, y0 - 7, '#ffcf5c');                     // стикер на рамке
+  // клавиатура, мышь, кружка, бумаги или растение
+  R(cx - 6, y0 + 4, 11, 4, '#5e5878'); R(cx - 5, y0 + 4, 9, 3, '#f1eefb'); for (let i = 0; i < 4; i++) P(cx - 4 + i * 2, y0 + 5, '#b9b2d6');
+  R(cx + 7, y0 + 5, 2, 3, '#f1eefb'); P(cx + 7, y0 + 5, '#b9b2d6');
+  R(x0 + 1, y0 + 5, 3, 3, ['#f7f5ff', '#ffcf5c', '#ff9ab8', '#7fe0b4'][(x0 / 28 | 0) % 4]); P(x0 + 2, y0 + 5, '#6b4a33'); P(x0 + 4, y0 + 6, '#d8d0f0');
+  if ((x0 + y0) % 3 === 0) { R(x0 + 19, y0 + 1, 4, 5, '#f7f5ff'); R(x0 + 20, y0 + 2, 2, 1, '#b9b2d6'); R(x0 + 20, y0 + 4, 2, 1, '#b9b2d6'); }
+  else { R(x0 + 19, y0 + 4, 4, 3, '#f3eefb'); R(x0 + 19, y0 + 6, 4, 1, '#c9c1e6'); P(x0 + 19, y0 + 2, '#3d8a4c'); P(x0 + 22, y0 + 2, '#58b86a'); P(x0 + 20, y0 + 1, '#2f8a4a'); P(x0 + 21, y0 + 3, '#58b86a'); P(x0 + 21, y0, '#5cbf6c'); }
+  // настольная лампа
+  const lit = lampLit(d, t);
+  R(x0 + 1, y0 + 3, 3, 1, '#2d2a40'); R(x0 + 2, y0, 1, 3, '#2d2a40'); R(x0 + 1, y0 - 2, 4, 2, lit ? '#ffe7a3' : '#4a4560'); P(x0 + 4, y0 - 2, lit ? '#fff6d8' : '#5e5878');
+  // сиденье офисного кресла и колёсики
+  disc(cx, y0 + 18, 4, '#232030', 0.7); disc(cx, y0 + 17, 3, '#353048', 0.6);
+}
+function drawChairBack(d) {
+  const { cx, y0 } = d;
+  R(cx - 5, y0 + 20, 11, 4, '#141220'); R(cx - 4, y0 + 21, 9, 2, '#2e2a40'); R(cx - 4, y0 + 21, 9, 1, '#4a4466');
+  R(cx, y0 + 24, 1, 1, '#141220'); P(cx - 3, y0 + 25, '#141220'); P(cx + 3, y0 + 25, '#141220'); P(cx, y0 + 26, '#141220');
+}
+function glow(x, y, rx, ry, rgb, a) {
+  const gr = g.createRadialGradient(x, y, 0, x, y, rx);
+  gr.addColorStop(0, `rgba(${rgb},${a})`); gr.addColorStop(1, `rgba(${rgb},0)`);
+  g.save(); g.translate(x, y); g.scale(1, ry / rx); g.translate(-x, -y);
+  g.fillStyle = gr; g.fillRect(x - rx, y - rx, rx * 2, rx * 2); g.restore();
+}
+function drawLampLight(t) {
+  g.globalCompositeOperation = 'lighter';
+  const k = phase === 'night' ? 0.42 : phase === 'dusk' ? 0.26 : 0.12;
+  for (const d of DESKS) if (lampLit(d, t)) { glow(d.x0 + 6, d.y0 + 3, 15, 9, '255,205,130', k); glow(d.x0 + 3, d.y0 - 1, 4, 3, '255,240,200', k); }
+  // уютный свет: торшер, лампа на полке, бра, аркада, телевизор, включённые мониторы
+  const amb = phase === 'night' ? 0.4 : phase === 'dusk' ? 0.28 : 0.14;
+  glow(82, 92, 18, 12, '255,210,140', amb); glow(112, 123, 10, 7, '255,210,140', amb * 0.8); glow(78, 61, 8, 10, '255,220,160', amb * 0.7);
+  glow(86, 121, 11, 7, '255,90,160', amb * 0.7); glow(115, 38, 22, 10, '90,150,255', amb * 0.45);
+  for (const d of DESKS) if (d.owner && arrived(d.owner) && d.owner.place === d) glow(d.cx, d.y0 - 2, 11, 7, '120,180,255', amb * 0.45);
+  g.globalCompositeOperation = 'source-over';
+}
+function drawStreetLights(t) {
+  if (phase === 'day') return;
+  const f = flicker(t);
+  g.globalCompositeOperation = 'lighter';
+  LAMPS.forEach((lx, i) => {
+    const fi = i === 2 ? f * f : f;                  // один фонарь мерцает сильнее
+    glow(lx, 170, 18, 9, '255,220,150', (0.22 * fi).toFixed(3));
+    g.fillStyle = `rgba(255,236,170,${(0.9 * fi).toFixed(2)})`; g.fillRect(lx - 1, 161, 3, 1);
+    if (wetSeason()) glow(lx, 192, 4, 10, '255,220,150', (0.12 * fi).toFixed(3));      // отражение на мокрой дороге
+  });
+  glow(192, 166, 10, 4, '255,220,150', 0.18);
+  g.globalCompositeOperation = 'source-over';
+}
+
+// ---------- ёлка зимой ----------
+function drawXmasTree(t) {
+  const cx = 146, by = 140;
+  R(cx - 1, by - 2, 3, 3, '#6b4a33');
+  for (let i = 0; i < 16; i++) { const w = 1 + Math.floor(i * 0.45); R(cx - w, by - 3 - (15 - i), w * 2 + 1, 1, i % 4 === 3 ? '#2f6e3d' : '#3d8a4c'); }
+  P(cx, by - 19, '#ffcf5c'); P(cx - 1, by - 18, '#ffcf5c'); P(cx + 1, by - 18, '#ffcf5c');
+  const cols = ['#ff5c5c', '#5cc8ff', '#ffcf5c', '#ff9ab8'];
+  [[0, -15], [-2, -12], [2, -10], [-3, -7], [3, -6], [0, -9], [-4, -4], [4, -4], [1, -5]].forEach(([dx, dy], i) => P(cx + dx, by + dy, cols[(i + (t * 2 | 0)) % 4]));
+}
+
+// ---------- машины ----------
+const cars = [];
+let nextCar = 1;
+const CAR_COLORS = ['#e0745f', '#5cc8ff', '#ffd35c', '#f7f5ff', '#7b61ff', '#2fd3a0', '#2d2a40'];
+function carStep(dt, t) {
+  if (t > nextCar) {
+    const dir = Math.random() < 0.5 ? 1 : -1;
+    cars.push({ x: dir > 0 ? -30 : W + 30, dir, y: dir > 0 ? 192 : 208, col: CAR_COLORS[Math.random() * CAR_COLORS.length | 0], v: 45 + Math.random() * 30 });
+    nextCar = t + 4 + Math.random() * 9;
+  }
+  for (const c of cars) c.x += c.dir * c.v * dt;
+  for (let i = cars.length - 1; i >= 0; i--) if (cars[i].x < -40 || cars[i].x > W + 40) cars.splice(i, 1);
+}
+function drawCar(c) {
+  const x = Math.round(c.x) - 11, y = c.y - 5, f = c.dir > 0;
+  R(x + 1, y + 10, 22, 1, 'rgba(0,0,0,0.3)');
+  if (wetSeason()) R(x + 1, y + 11, 20, 2, 'rgba(255,255,255,0.08)');
+  R(x, y, 22, 10, shade(c.col, 0.8)); R(x + 1, y + 1, 20, 8, c.col);
+  if (season === 'winter') R(x + 7, y + 2, 6, 6, '#f4f7fd');
+  R(f ? x + 13 : x + 4, y + 2, 5, 6, '#9cc8ff'); R(f ? x + 4 : x + 15, y + 2, 3, 6, '#6f8fb8');
+  if (season !== 'winter') R(f ? x + 7 : x + 8, y + 2, 6, 6, shade(c.col, 0.9));
+  R(f ? x + 21 : x, y + 1, 1, 2, '#fff3c4'); R(f ? x + 21 : x, y + 7, 1, 2, '#fff3c4');
+  R(f ? x : x + 21, y + 1, 1, 2, '#ff5c5c'); R(f ? x : x + 21, y + 7, 1, 2, '#ff5c5c');
+  if (phase !== 'day') { cur.fillStyle = 'rgba(255,243,196,0.16)'; for (let i = 0; i < 26; i++) cur.fillRect(f ? x + 22 + i : x - 1 - i, y + 1 - i / 6, 1, 8 + i / 3); }
+}
+
+// ---------- кадр ----------
+function frame(t, dt) {
+  windNow(t);
+  step(dt, t); carStep(dt, t); lampStep(dt, t); windStep(dt); weatherStep(dt, t);
+  g.drawImage(bgc, 0, 0);
+  drawBacklight(t);
+  for (const s of treeSprites) g.drawImage(s.c, s.x + Math.round(Math.sin(t * 1.4 + s.seed) * gust * 1.2), s.y);
+  // часы: киевское время, секундная стрелка тикает
+  const k = kyiv(), hh = (k.h % 12 + k.m / 60) / 12 * 6.283 - 1.571, mm = (k.m + k.s / 60) / 60 * 6.283 - 1.571, ss = k.s / 60 * 6.283 - 1.571;
+  line(262, 32, 262 + Math.cos(mm) * 3.4, 32 + Math.sin(mm) * 3.4, '#1D1A33');
+  line(262, 32, 262 + Math.cos(hh) * 2, 32 + Math.sin(hh) * 2, '#4A37C9');
+  P(262 + Math.round(Math.cos(ss) * 3.6), 32 + Math.round(Math.sin(ss) * 3.6), '#ff5c5c');
+  // телевизор: бежит график
+  const tv = rng((t * 1.5 | 0) + 5);
+  R(101, 28, 28, 12, '#1d2440');
+  let py = 36; for (let x = 0; x < 26; x++) { py = Math.max(30, Math.min(38, py + (tv() < 0.5 ? -1 : 1))); P(102 + x, py, x > 18 ? '#7fe0b4' : '#5cc8ff'); }
+  // пар от кофемашины
+  for (let i = 0; i < 3; i++) { const q = (t * 0.8 + i / 3) % 1; g.fillStyle = `rgba(255,255,255,${(0.7 * (1 - q)).toFixed(2)})`; g.fillRect(279 + Math.round(Math.sin(t * 2 + i)), 45 - q * 7, 1, 1); }
+  // звёзды на ковре мерцают
+  for (let i = 0; i < 9; i++) { const a = Math.sin(t * 1.3 + i * 2.1); if (a > 0.3) P(86 + (i * 37) % 60, 61 + (i * 23) % 48, a > 0.8 ? '#ffe7a3' : '#b9a8ff'); }
+  // чёрный кот на холодильнике
+  R(300, 52, 5, 4, '#1b1830'); P(300, 51, '#1b1830'); P(304, 51, '#1b1830'); R(305, 54, 2, 1, '#1b1830'); P(306, 53 + Math.round(Math.sin(t * 1.7)), '#1b1830');
+  if ((t % 4.3) > 0.15) { P(301, 53, '#ffd35c'); P(303, 53, '#ffd35c'); }
+  // кот спит у дивана, хвост шевелится
+  R(128, 122, 7, 4, '#e0915f'); R(127, 121, 3, 3, '#e0915f'); P(127, 120, '#e0915f'); P(129, 120, '#e0915f'); P(128, 122, '#1D1A33');
+  const tail = Math.round(Math.sin(t * 2) * 1.5); R(135, 123 + tail, 3, 1, '#c97a4c'); R(129, 125, 4, 1, '#c97a4c');
+
+  // всё, что стоит на полу, рисуется по глубине (y)
+  const items = [];
+  for (const d of DESKS) { items.push({ y: d.y0 + 13, draw: () => drawDesk(d, t) }); items.push({ y: d.y0 + 21, draw: () => drawChairBack(d) }); }
+  items.push({ y: 72, draw: () => {                 // журнальный столик: кружка, книги, растение
+    furn(104, 64, 22, 6, 2, '#8a5f3f'); R(105, 72, 1, 1, '#5b3d2a'); R(124, 72, 1, 1, '#5b3d2a');
+    R(107, 65, 5, 3, '#4A37C9'); R(107, 66, 5, 1, '#ff9ab8'); R(115, 66, 3, 3, '#f7f5ff'); P(118, 67, '#d8d0f0'); if ((t * 2 | 0) % 2) P(116, 64, 'rgba(255,255,255,0.6)');
+    R(120, 66, 3, 2, '#b5643c'); P(120, 65, '#3d8a4c'); P(122, 65, '#58b86a'); P(121, 64, '#2f8a4a'); } });
+  items.push({ y: 74, draw: () => {                 // кресла-мешки
+    disc(84, 74, 6, '#7a2f2a', 0.8); disc(84, 73, 5, '#c95f4c', 0.8); disc(83, 72, 3, '#e0745f', 0.8); P(81, 70, '#f39a85');
+    disc(146, 74, 6, '#1f5f86', 0.8); disc(146, 73, 5, '#3f9fd0', 0.8); disc(145, 72, 3, '#5cc8ff', 0.8); P(143, 70, '#a8e4ff'); } });
+  items.push({ y: 92, draw: () => {                 // сиденье дивана с подушками
+    R(91, 89, 48, 14, '#2a1660'); R(92, 90, 46, 12, '#6a42bd'); R(92, 90, 46, 1, '#8a66da'); R(109, 91, 1, 10, '#53309e'); R(121, 91, 1, 10, '#53309e');
+    R(93, 91, 5, 4, '#ff8a6b'); R(93, 91, 5, 1, '#ffb39c'); R(132, 91, 5, 4, '#ff9ab8'); R(132, 91, 5, 1, '#ffc2d6'); } });
+  items.push({ y: 106, draw: () => {                // спинка и подлокотники
+    R(89, 101, 52, 7, '#2a1660'); R(90, 102, 50, 5, '#7a4fd1'); R(90, 102, 50, 1, '#9a76ea'); R(90, 106, 50, 1, '#5c37a8');
+    for (const ax of [88, 138]) { R(ax - 1, 87, 6, 21, '#2a1660'); R(ax, 88, 4, 19, '#5c37a8'); R(ax, 88, 4, 1, '#8460d6'); } } });
+  items.push({ y: 134, draw: () => {                // аркадный автомат
+    R(79, 119, 15, 17, '#120f24'); R(80, 120, 13, 15, '#2b2350'); R(80, 120, 2, 15, '#3d3470');
+    R(80, 120, 13, 3, (t * 1.5 | 0) % 4 ? '#ff5aa0' : '#ff8cc0'); R(81, 121, 11, 1, '#ffc2dc'); R(82, 124, 9, 7, '#0d0b1c');
+    const playing = CHILL[4].owner && arrived(CHILL[4].owner) && CHILL[4].owner.place === CHILL[4];
+    const ar = (t * (playing ? 6 : 2) | 0);
+    for (let k = 0; k < 3; k++) { const ix = 83 + ((ar + k * 3) % 6), iy = 125 + k * 2; P(ix, iy, '#7fe0b4'); P(ix + 1, iy, '#7fe0b4'); }
+    R(84 + (ar * 5) % 6, 130, 2, 1, '#ff5aa0');
+    if (playing && (t * 3 | 0) % 2) R(83, 125, 7, 1, '#ffcf5c');
+    R(81, 131, 11, 3, '#3d3470'); R(81, 131, 11, 1, '#5a4c96'); P(83, 132, '#ff5c5c'); P(86, 131, '#f7f5ff'); P(88, 132, '#5cc8ff'); P(90, 132, '#ffcf5c'); } });
+  items.push({ y: 117, draw: () => {                // кухонный стол с пончиками и табуретами
+    disc(294, 119, 7, 'rgba(0,0,0,0.15)', 0.7); disc(294, 116, 8, '#5b3d2a', 0.7); disc(294, 116, 7, '#c98f5c', 0.7); disc(293, 115, 4, '#ddaa7a', 0.7);
+    disc(292, 115, 2, '#f7f5ff', 0.7); P(292, 115, '#e0915f'); P(291, 114, '#ff9ab8'); R(297, 116, 2, 2, '#ffcf5c');
+    for (const sx of [284, 304]) { disc(sx, 120, 3, '#141220', 0.7); disc(sx, 119, 3, '#353048', 0.7); P(sx - 1, 118, '#4a4466'); } } });
+  if (season === 'winter') items.push({ y: 140, draw: () => drawXmasTree(t) });
+  for (const a of agents.values()) items.push({ y: a.y + 0.5, draw: () => drawBot(a, t) });
+  items.sort((p, q) => p.y - q.y).forEach(i => i.draw());
+  if (ROOM_DIM[phase]) { g.fillStyle = ROOM_DIM[phase]; g.fillRect(76, 24, 232, 136); }
+  for (const c of cars) drawCar(c);
+  drawLampLight(t);
+  drawStreetLights(t);
+  drawWeather(t);
+  drawStreaks(t);
+  for (const a of agents.values()) drawLabel(a, t);
+}
+
+// ---------- вывод на экран ----------
+let dpr = 1, scale = 1, ox = 0, oy = 0;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(innerWidth * dpr); cv.height = Math.round(innerHeight * dpr);
+  scale = Math.max(1, Math.ceil(Math.max(cv.width / W, cv.height / H)));
+  ox = Math.round((cv.width - W * scale) / 2); oy = Math.round((cv.height - H * scale) / 2);
+}
+addEventListener('resize', resize); resize();
+const FONT_UI = 'Tiny5, "Segoe UI", sans-serif';
+const fontPx = k => 10 * Math.max(2, Math.round(k));    // размер шрифта кратен 10, чтобы пиксели не размывались
+
+// рамка с «пиксельными» углами
+function pixelBox(x, y, w, h, u, fill, edge) {
+  ctx.fillStyle = edge; ctx.fillRect(x + u, y, w - 2 * u, h); ctx.fillRect(x, y + u, w, h - 2 * u);
+  ctx.fillStyle = fill; ctx.fillRect(x + 2 * u, y + u, w - 4 * u, h - 2 * u); ctx.fillRect(x + u, y + 2 * u, w - 2 * u, h - 4 * u);
+}
+// облачка с репликами: рисуются в полном разрешении пиксельным шрифтом
+function bubbles(t) {
+  const fs = fontPx(scale * 0.4), u = Math.max(2, Math.round(scale * 0.5)), pad = u * 2;
+  ctx.font = `${fs}px ${FONT_UI}`; ctx.textBaseline = 'middle';
+  for (const a of agents.values()) {
+    if (!a.say || a.say.until < t) continue;
+    const w = Math.ceil(ctx.measureText(a.say.text).width) + pad * 2 + u * 2, h = fs + pad * 2;
+    const cxp = ox + Math.round(a.x) * scale, bottom = oy + ((a.labelY ?? a.y - 20) - 2) * scale;
+    const x = Math.max(4 * u, Math.min(cv.width - w - 4 * u, Math.round(cxp - w / 2))), y = Math.round(bottom - h - u * 2);
+    const fade = Math.min(1, (a.say.until - t) / 0.4, (t - (a.say.until - 4)) / 0.2);
+    ctx.globalAlpha = Math.max(0, fade);
+    pixelBox(x, y, w, h, u, '#f7f5ff', '#1D1A33');
+    ctx.fillStyle = '#1D1A33'; ctx.fillRect(cxp - u, y + h - u, u * 3, u); ctx.fillRect(cxp, y + h, u, u * 2);
+    ctx.fillStyle = '#f7f5ff'; ctx.fillRect(cxp, y + h - u, u, u);
+    ctx.fillStyle = '#1D1A33'; ctx.fillText(a.say.text, x + pad + u, y + h / 2 + 1);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---------- панель агентов и кнопка сезона ----------
+let btn = null;
+function seasonIcon(x, y, u, s) {
+  const px = (dx, dy, c) => { ctx.fillStyle = c; ctx.fillRect(x + dx * u, y + dy * u, u, u); };
+  const map = {
+    winter: [[2,0],[2,1],[0,2],[1,2],[2,2],[3,2],[4,2],[2,3],[2,4],[0,0],[4,0],[0,4],[4,4]],
+    summer: [[1,0],[2,0],[3,0],[0,1],[1,1],[2,1],[3,1],[4,1],[2,2],[1,3],[3,4]],
+    autumn: [[2,0],[1,1],[2,1],[3,1],[0,2],[1,2],[2,2],[3,2],[4,2],[1,3],[2,3],[3,3],[2,4]],
+    spring: [[2,0],[1,1],[3,1],[2,2],[0,2],[4,2],[1,3],[3,3],[2,4]],
+  };
+  const col = { winter: '#9cd8ff', summer: '#7fb4ff', autumn: '#ff9a4a', spring: '#ff9ab8' }[s];
+  for (const [dx, dy] of map[s]) px(dx, dy, s === 'spring' && dx === 2 && dy === 2 ? '#ffcf5c' : col);
+}
+function panel(t) {
+  const u = Math.max(2, Math.round(2 * dpr)), fs = fontPx(2 * dpr), small = fs, lh = Math.round(fs * 1.3), pad = 6 * u;
+  const list = [...agents.values()].filter(a => !a.leaving);
+  const k = kyiv(), clock = `${String(k.h).padStart(2, '0')}:${String(k.m).padStart(2, '0')}`;
+  const head = 'AI-ОФІС', sub = online ? `в офісі: ${list.length}` : 'сервер не запущено';
+  const seasonTxt = `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`;
+  ctx.textBaseline = 'middle';
+  const rows = list.map(a => {
+    const act = activity(a, t);
+    return { a, act, name: a.name, st: ACT_UA[act] + (act === 'work' && a.tool ? ' · ' + a.tool : '') };
+  });
+  ctx.font = `${fs}px ${FONT_UI}`;
+  let w = ctx.measureText(head + '  ' + clock).width + 10 * u;
+  for (const r of rows) w = Math.max(w, ctx.measureText(r.name).width + 9 * u);
+  ctx.font = `${small}px ${FONT_UI}`;
+  for (const r of rows) w = Math.max(w, ctx.measureText(r.st).width + 9 * u);
+  w = Math.max(w, ctx.measureText(sub).width, ctx.measureText(seasonTxt).width + 12 * u, 120 * dpr) + pad * 2;
+  w = Math.round(w);
+  const headH = lh + 2 * u, rowH = Math.round(lh * 1.55), btnH = lh + 2 * u;
+  const h = pad + headH + u * 3 + Math.max(1, rows.length) * rowH + u * 3 + btnH + pad;
+  const x = cv.width - w - 12 * u, y = 12 * u;
+  if (SHOW_HUD) {
+    ctx.globalAlpha = 0.94;
+    pixelBox(x - u, y - u, w + 2 * u, h + 2 * u, u, '#4A37C9', 'rgba(74,55,201,0.35)');
+    pixelBox(x, y, w, h, u, '#1D1A33', '#7d6ef0');
+    ctx.globalAlpha = 1;
+    // шапка как вывеска на здании
+    pixelBox(x + pad - u * 2, y + pad - u, w - pad * 2 + u * 4, headH, u, '#120f24', '#4A37C9');
+    ctx.font = `${fs}px ${FONT_UI}`; ctx.fillStyle = '#b9a8ff'; ctx.textAlign = 'left';
+    ctx.fillText(head, x + pad + u, y + pad - u + headH / 2 + 1);
+    ctx.fillStyle = '#ffcf5c'; ctx.textAlign = 'right';
+    ctx.fillText(clock + ((k.s % 2) ? ' ' : '·'), x + w - pad - u, y + pad - u + headH / 2 + 1);
+    ctx.textAlign = 'left';
+    let ry = y + pad + headH + u * 3;
+    ctx.font = `${small}px ${FONT_UI}`; ctx.fillStyle = online ? '#9a92c4' : '#ffcf5c';
+    if (!rows.length) { ctx.fillText(online ? 'Поки нікого немає' : sub, x + pad, ry + rowH / 2); ry += rowH; }
+    for (const r of rows) {
+      const kd = KIND[r.a.kind];
+      // голова агента в пикселях
+      const hx = x + pad, hy = ry + Math.round(rowH / 2) - 3 * u;
+      ctx.fillStyle = kd.head; ctx.fillRect(hx, hy, 6 * u, 5 * u);
+      ctx.fillStyle = '#1D1A33'; ctx.fillRect(hx + u, hy + 2 * u, 4 * u, 2 * u);
+      ctx.fillStyle = r.act === 'wait' ? '#ffcf5c' : kd.eye; ctx.fillRect(hx + u * 2, hy + 2 * u, u, u); ctx.fillRect(hx + u * 4, hy + 2 * u, u, u);
+      ctx.fillStyle = kd.body; ctx.fillRect(hx, hy + 5 * u, 6 * u, 2 * u);
+      ctx.font = `${fs}px ${FONT_UI}`; ctx.fillStyle = '#f7f5ff';
+      ctx.fillText(r.name, hx + 9 * u, ry + rowH * 0.32);
+      const col = r.act === 'work' ? '#7fe0b4' : r.act === 'wait' ? ((t * 2 | 0) % 2 ? '#ffcf5c' : '#c9a23f') : (r.act === 'coffee' || r.act === 'tea') ? '#ff9ab8' : '#b9a8ff';
+      ctx.font = `${small}px ${FONT_UI}`; ctx.fillStyle = col;
+      ctx.fillText(r.st, hx + 9 * u, ry + rowH * 0.74);
+      ry += rowH;
+    }
+    ry += u * 3;
+    btn = { x: x + pad - u * 2, y: ry, w: w - pad * 2 + u * 4, h: btnH };
+  } else {
+    ctx.font = `${small}px ${FONT_UI}`;
+    const bw = Math.round(ctx.measureText(seasonTxt).width + 16 * u);
+    btn = { x: cv.width - bw - 12 * u, y: 12 * u, w: bw, h: btnH };
+  }
+  // кнопка сезона
+  pixelBox(btn.x, btn.y, btn.w, btn.h, u, btnHover ? '#2e2760' : '#231e48', btnHover ? '#b9a8ff' : '#4A37C9');
+  seasonIcon(btn.x + 4 * u, btn.y + Math.round(btn.h / 2) - Math.round(2.5 * u), u, season);
+  ctx.font = `${small}px ${FONT_UI}`; ctx.fillStyle = '#E0DAFA'; ctx.textAlign = 'left';
+  ctx.fillText(seasonTxt, btn.x + 11 * u, btn.y + btn.h / 2 + 1);
+  ctx.fillStyle = '#7d6ef0'; ctx.textAlign = 'right'; ctx.fillText('›', btn.x + btn.w - 4 * u, btn.y + btn.h / 2 + 1);
+  ctx.textAlign = 'left';
+}
+let btnHover = false;
+const inBtn = e => { if (!btn) return false; const px = e.clientX * dpr, py = e.clientY * dpr; return px >= btn.x && px <= btn.x + btn.w && py >= btn.y && py <= btn.y + btn.h; };
+addEventListener('click', e => { if (inBtn(e)) setSeason(SEASONS[(SEASONS.indexOf(seasonPick) + 1) % SEASONS.length]); });
+addEventListener('mousemove', e => { btnHover = inBtn(e); cv.style.cursor = btnHover ? 'pointer' : 'default'; });
+
+let last = performance.now();
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = (now - last) / 1000;
+  if (dt < 1 / 30 - 0.002) return;                 // не чаще 30 кадров в секунду
+  last = now;
+  if (document.hidden) return;
+  cur = g;
+  const t = now / 1000;
+  frame(t, Math.min(dt, 0.1));
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#0b0a16'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(scr, ox, oy, W * scale, H * scale);
+  bubbles(t);
+  panel(t);
+}
+
+// ---------- данные ----------
+let online = false;
+async function poll() {
+  if (DEMO) { online = true; sync(DEMO_LIST); return; }
+  try {
+    const res = await fetch(SERVER + '/state', { cache: 'no-store', signal: AbortSignal.timeout(1500) });
+    const data = await res.json();
+    online = true;
+    sync(data.agents || []);
+  } catch {
+    online = false;
+    sync([]);
+  }
+}
+const DEMO_LIST = [
+  { id: 'd1', kind: 'claude', name: 'Claude Code · tgti', status: 'working', tool: 'Edit' },
+  { id: 'd2', kind: 'codex', name: 'Codex', status: 'waiting' },
+  { id: 'd3', kind: 'chatgpt', name: 'ChatGPT', status: 'working' },
+  { id: 'd4', kind: 'claude-app', name: 'Claude', status: 'idle' },
+];
+function refreshScene() {
+  season = seasonNow(); phase = phaseNow();
+  drops.length = 0; splashes.length = 0; ripples.length = 0;
+  renderBg(); buildTrees();
+}
+refreshScene();
+setInterval(() => { const p = phaseNow(), s = seasonNow(); if (p !== phase || s !== season) refreshScene(); }, 60e3);
+setInterval(poll, 2000); poll();
+if (document.fonts) document.fonts.load('20px Tiny5 ', 'Сезон AI').catch(() => {});
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
