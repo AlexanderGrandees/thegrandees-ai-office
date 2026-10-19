@@ -864,6 +864,7 @@ const LINES = {
   coffee: ['Кава!', 'Перерва на каву', 'Ще одну каву'], tea: ['Час на чай', 'Чай з лимоном', 'Гарячий чай'],
   tv: ['Графік росте', 'Дивлюсь ринок'], game: ['Ще рівень!', 'Рекорд!', 'Майже пройшов'], music: ['Гарна пісня', 'Відпочиваю'],
   phone: ['Гортаю новини'], sleep: ['Хррр…'], desk: ['Чекаю задачу', 'Що далі?'],
+  catDesk: ['Мурчику, привіт!', 'Котик!', 'Не лягай на клаву', 'Хто тут прийшов?'], catSofa: ['Гарний котик', 'Мурчить…'], catBeg: ['Це не тобі', 'Кава не для котів', 'Ну добре, трошки'],
   flash: ['Ого, блискавка!', 'Гримить…', 'Ух!'],
   sky: {
     clear: ['Гарна погода', 'Тихо сьогодні'], rain: ['Знову дощ', 'Пахне дощем', 'Парасолька є?'], storm: ['Гроза!', 'Ну й злива'],
@@ -1213,6 +1214,105 @@ function drawCar(c, t) {
   }
 }
 
+// ---------- рыжий кот Мурчик: спит, гуляет, приходит к агентам ----------
+// К работающему за столом садится рядом, к тем, кто на диване, ложится мурчать, у кофе выпрашивает. Агенты отвечают.
+const CAT_MAT = { lane: 142, entry: [{ x: 131, y: 142 }, { x: 131, y: 124 }] };
+const cat = { x: 131, y: 124, path: [], pending: null, place: CAT_MAT, dir: 'left', ph: 0, mode: 'sleep', until: 0, buddy: null, say: null, speed: 20, hearts: [], nextHeart: 0 };
+const catTime = (a, b2) => FAST ? rand(a / 4, b2 / 4) : rand(a, b2);
+function catGo(place, mode, buddy = null, speed = 20) {
+  cat.mode = mode; cat.buddy = buddy; cat.speed = speed; cat.until = 0; cat.say = null;
+  if (place === cat.place && !cat.path.length) return;
+  routeTo(cat, place);
+}
+function catSay(text, t) { cat.say = { text, until: t + 3 }; sfx.meow(); }
+function catPlan(t) {
+  const here = [...agents.values()].filter(a => !a.arriving && !a.leaving && arrived(a));
+  const desk = here.filter(a => a.place === a.desk), sofa = here.filter(a => a.place.sit && !a.place.desk && a.place.lane === 82), drink = here.filter(a => a.brk && a.place === a.brk.spot);
+  const r = Math.random();
+  if (drink.length && r < 0.6) return catGo({ lane: 142, entry: [{ x: 288, y: 142 }, { x: 288, y: 128 }] }, 'beg', pick(drink), 34);
+  if (r < 0.3) return catGo(CAT_MAT, 'sleep');
+  if (desk.length && r < 0.65) {
+    const a = pick(desk), d = a.desk;
+    return catGo({ lane: d.lane, entry: [{ x: d.cx + 10, y: d.lane }, { x: d.cx + 10, y: d.y0 + 22 }] }, 'visit', a);
+  }
+  if (sofa.length && r < 0.85) {
+    const a = pick(sofa), x = Math.max(97, a.x - 7);           // слева от агента: справа над ним значок
+    return catGo({ lane: 82, entry: [{ x, y: 82 }, { x, y: 97 }] }, 'sofa', a);
+  }
+  const spots = [[142, rand(100, 140)], [118, rand(160, 262)], [78, rand(160, 262)], [142, rand(170, 250)]];
+  const [lane, x] = pick(spots);
+  return catGo({ lane, entry: [{ x, y: lane }] }, 'wander');
+}
+function catStep(dt, t) {
+  cat.ph += dt;
+  if (cat.say && cat.say.until < t) cat.say = null;
+  for (const h of cat.hearts) { h.y -= dt * 6; h.life -= dt; }
+  cat.hearts = cat.hearts.filter(h => h.life > 0);
+  if (cat.path.length) {
+    const p = cat.path[0], dx = p.x - cat.x, dy = p.y - cat.y, d = Math.hypot(dx, dy), v = cat.speed * dt;
+    if (Math.abs(dx) > 0.3) cat.dir = dx > 0 ? 'right' : 'left';
+    if (d <= v) { cat.x = p.x; cat.y = p.y; cat.path.shift(); if (!cat.path.length && cat.pending) routeTo(cat, cat.pending); }
+    else { cat.x += dx / d * v; cat.y += dy / d * v; }
+    return;
+  }
+  const b2 = cat.buddy;
+  if (!cat.until) {
+    // пришёл на место
+    cat.until = t + ({ sleep: catTime(25, 70), visit: catTime(9, 15), sofa: catTime(16, 30), beg: catTime(6, 10), wander: catTime(2, 5) })[cat.mode];
+    if (b2) cat.dir = b2.x > cat.x ? 'right' : 'left';
+    if (cat.mode === 'visit') { say(b2, pick(LINES.catDesk), t, true); setTimeout(() => catSay(pick(['Мяу!', 'Мяу', 'Мрр?']), performance.now() / 1000), 1200); }
+    if (cat.mode === 'sofa') { catSay('Мрр…', t); sfx.purr(); if (Math.random() < 0.6) setTimeout(() => say(b2, pick(LINES.catSofa), performance.now() / 1000, false), 1500); }
+    if (cat.mode === 'beg') { catSay('Мяу?', t); setTimeout(() => say(b2, pick(LINES.catBeg), performance.now() / 1000, false), 1400); }
+  }
+  // сердечки, пока кот рядом с агентом
+  if ((cat.mode === 'visit' || cat.mode === 'sofa') && t > cat.nextHeart) { cat.hearts.push({ x: cat.x + rand(-2, 2), y: cat.y - 9, life: 1.6 }); cat.nextHeart = t + rand(1.2, 2.6); }
+  const gone = b2 && (b2.leaving || !agents.has(b2.id) || !arrived(b2) || (cat.mode === 'beg' && !b2.brk));
+  if (t > cat.until || gone) catPlan(t);
+}
+const CAT = { base: '#e0915f', dark: '#c97a4c', light: '#f6c79a', ol: '#7a3f22' };
+function drawCat(t) {
+  const X = Math.round(cat.x * S), Y = Math.round(cat.y * S), walking = cat.path.length > 0;
+  const lying = !walking && (cat.mode === 'sleep' || cat.mode === 'sofa');
+  if (lying) {
+    // свернулся клубком, хвост шевелится
+    discQ(X + 2, Y, 7, CAT.dark, 0.6); discQ(X + 2, Y - 1, 6, CAT.base, 0.6); q(X, Y - 3, CAT.dark); q(X + 4, Y - 3, CAT.dark); q(X + 2, Y - 4, CAT.dark); q(X + 6, Y - 1, CAT.dark);
+    discQ(X - 7, Y - 1, 4, CAT.base); q(X - 10, Y - 5, CAT.base); q(X - 4, Y - 5, CAT.base);
+    const awake = cat.mode === 'sofa' && (t % 5) < 2.2;
+    if (awake) { q(X - 9, Y - 2, '#3d8a4c'); q(X - 5, Y - 2, '#3d8a4c'); } else { Q(X - 9, Y - 1, 2, 1, '#1D1A33'); Q(X - 5, Y - 1, 1, 1, '#1D1A33'); }
+    q(X - 7, Y + 1, '#ff9ab8');
+    Q(X + 9, Y + 1 + Math.round(Math.sin(t * 2) * 1.5), 6, 2, CAT.dark);
+    return;
+  }
+  const f = cat.dir === 'right' ? 1 : -1, c = (dx, dy, w, h, col) => Q(f > 0 ? X + dx : X - dx - w + 1, Y + dy, w, h, col);
+  Q(X - 7, Y - 1, 15, 2, 'rgba(0,0,0,0.22)');
+  if (walking) {
+    const st = (cat.ph * (cat.speed > 25 ? 14 : 9) | 0) % 2;
+    for (const [lx, ph] of [[-5, 0], [-3, 1], [2, 1], [4, 0]]) c(lx, -3 - (st === ph ? 1 : 0), 1, 3, CAT.dark);
+    c(-6, -8, 12, 6, CAT.ol); c(-5, -8, 10, 5, CAT.base); c(-5, -8, 10, 1, CAT.light); c(-4, -4, 8, 1, CAT.light);
+    c(-3, -7, 1, 3, CAT.dark); c(0, -7, 1, 3, CAT.dark);
+    c(4, -12, 6, 6, CAT.ol); c(4, -11, 5, 5, CAT.base); c(4, -13, 1, 2, CAT.base); c(7, -13, 1, 2, CAT.base);
+    c(7, -10, 1, 1, '#2f6e3d'); c(9, -8, 1, 1, '#ff9ab8');
+    const tw = Math.round(Math.sin(t * 6) * 1.5);
+    c(-8, -9, 2, 1, CAT.dark); c(-9, -11 + tw, 1, 3, CAT.dark); c(-10, -12 + tw, 1, 1, CAT.dark);
+    return;
+  }
+  // сидит: мордочкой к агенту, хвост обвит вокруг лап
+  c(-4, -8, 9, 8, CAT.ol); c(-3, -8, 7, 7, CAT.base); c(-1, -5, 3, 4, CAT.light); c(-3, -1, 7, 1, CAT.dark);
+  c(-3, -14, 8, 7, CAT.ol); c(-2, -14, 7, 6, CAT.base); c(-3, -16, 2, 2, CAT.base); c(3, -16, 2, 2, CAT.base); q(f > 0 ? X - 2 : X + 2, Y - 15, '#ff9ab8'); q(f > 0 ? X + 4 : X - 4, Y - 15, '#ff9ab8');
+  const blink = (t % 3.3) < 0.15;
+  c(0, -12, 1, blink ? 1 : 2, blink ? CAT.dark : '#2f6e3d'); c(3, -12, 1, blink ? 1 : 2, blink ? CAT.dark : '#2f6e3d'); c(2, -10, 1, 1, '#ff9ab8');
+  c(-1, -11, 1, 1, CAT.dark);
+  const sw = Math.round(Math.sin(t * 2.5) * 1.2);
+  c(-7, -2 + sw, 4, 1, CAT.dark); c(-8, -4 + sw, 1, 3, CAT.dark);
+}
+function drawHearts() {
+  const H5 = ['.#.#.', '#####', '.###.', '..#..'];
+  for (const h of cat.hearts) {
+    const X = Math.round(h.x * S), Y = Math.round(h.y * S), a = Math.min(1, h.life / 0.5);
+    for (let yy = 0; yy < 4; yy++) for (let xx = 0; xx < 5; xx++) if (H5[yy][xx] === '#') q(X + xx - 2, Y + yy, `rgba(255,110,150,${a.toFixed(2)})`);
+  }
+}
+
 // ---------- звук: всё синтезируется в WebAudio, без звуковых файлов ----------
 // Фон: дождь, ветер, гул города, машины. События: гром, клавиатуры, лампы, такси, кофе, реплики, сигнал «ждёт тебя».
 let soundOn = store.get('office-sound') !== 'off', volume = Math.max(0, Math.min(1, +(store.get('office-volume') ?? 35) / 100));
@@ -1274,6 +1374,8 @@ const sfx = {
   horn() { tone(415, 0.13, 'square', 0.025); tone(415, 0.16, 'square', 0.025, 0.2); },
   door() { if (sndOk()) burst(0.09, 0.14, [filt('lowpass', 380)], 0, 0.004, true); },
   pour() { if (sndOk()) burst(1.8, 0.04, [filt('bandpass', 2600, 1.2)], 0.1, 0.25); },
+  meow() { tone(820, 0.32, 'triangle', 0.05, 0, 520); tone(1640, 0.25, 'sine', 0.012, 0.02, 1000); },
+  purr() { if (!sndOk()) return; for (let i = 0; i < 8; i++) burst(0.22, 0.05, [filt('lowpass', 140)], i * 0.27, 0.08, true); },
   cricket() { for (let i = 0; i < 3; i++) tone(4300, 0.035, 'sine', 0.012, i * 0.06); },
   bird() { const n = 2 + (Math.random() * 3 | 0), f = 2600 + Math.random() * 900; for (let i = 0; i < n; i++) tone(f, 0.09, 'sine', 0.018, i * 0.13, f * (1.3 + Math.random() * 0.3)); },
 };
@@ -1302,7 +1404,7 @@ document.addEventListener('visibilitychange', () => { if (!ac) return; if (docum
 // ---------- кадр ----------
 function frame(t, dt) {
   windNow(t);
-  step(dt, t); carStep(dt, t); lampStep(dt, t); windStep(dt); weatherStep(dt, t); audioStep(dt, t);
+  step(dt, t); carStep(dt, t); lampStep(dt, t); windStep(dt); weatherStep(dt, t); catStep(dt, t); audioStep(dt, t);
   g.drawImage(bgc, 0, 0, W, H);
   drawBacklight(t);
   for (const s of treeSprites) g.drawImage(s.c, s.x + Math.round(Math.sin(t * 1.4 + s.seed) * gust * 2.4) / S, s.y, s.w, s.w);
@@ -1328,10 +1430,6 @@ function frame(t, dt) {
   Q(600, 104, 10, 8, '#1b1830'); Q(598, 100, 7, 6, '#1b1830'); q(598, 99, '#1b1830'); q(604, 99, '#1b1830');
   Q(610, 104 + Math.round(Math.sin(t * 1.7) * 2), 2, 6, '#1b1830');
   if ((t % 4.3) > 0.15) { q(600, 102, '#ffd35c'); q(603, 102, '#ffd35c'); }
-  // рыжий кот спит на коврике, хвост шевелится
-  discQ(264, 248, 7, '#c97a4c', 0.6); discQ(264, 247, 6, '#e0915f', 0.6); q(262, 245, '#c97a4c'); q(266, 245, '#c97a4c'); q(264, 244, '#c97a4c'); q(268, 247, '#c97a4c');
-  discQ(255, 247, 4, '#e0915f'); q(252, 243, '#e0915f'); q(258, 243, '#e0915f'); Q(253, 247, 2, 1, '#1D1A33'); Q(257, 247, 1, 1, '#1D1A33'); q(255, 249, '#ff9ab8');
-  Q(271, 249 + Math.round(Math.sin(t * 2) * 1.5), 6, 2, '#c97a4c');
 
   // всё, что стоит на полу, рисуется по глубине (y)
   const items = [];
@@ -1374,6 +1472,7 @@ function frame(t, dt) {
     Q(594, 228, 4, 4, '#ffcf5c'); Q(594, 228, 4, 1, '#c97a2c'); q(598, 229, '#d8b040'); } });
   if (season === 'winter') items.push({ y: 140, draw: () => drawXmasTree(t) });
   for (const a of agents.values()) items.push({ y: a.y + 0.5, draw: () => drawBot(a, t) });
+  items.push({ y: cat.y + (cat.mode === 'sofa' && !cat.path.length ? -2 : 0.3), draw: () => drawCat(t) });
   items.sort((p, q2) => p.y - q2.y).forEach(i => i.draw());
   if (ROOM_DIM[phase]) { g.fillStyle = ROOM_DIM[phase]; g.fillRect(76, 24, 232, 136); }
   if (ROOM_WARM[phase]) { g.globalCompositeOperation = 'lighter'; g.fillStyle = `rgba(255,170,90,${ROOM_WARM[phase]})`; g.fillRect(76, 44, 232, 114); g.globalCompositeOperation = 'source-over'; }
@@ -1385,6 +1484,7 @@ function frame(t, dt) {
   drawWeather(t);
   drawStreaks(t);
   drawFlash();
+  drawHearts();
   for (const a of agents.values()) drawLabel(a, t);
 }
 
@@ -1409,12 +1509,13 @@ function pixelBox(x, y, w, h, u, fill, edge) {
 function bubbles(t) {
   const fs = fontPx(ws * 0.4), u = Math.max(2, Math.round(ws * 0.5)), pad = u * 2;
   ctx.font = `${fs}px ${FONT_UI}`; ctx.textBaseline = 'middle';
-  for (const a of agents.values()) {
+  cat.labelY = cat.y - (cat.path.length || cat.mode === 'sleep' || cat.mode === 'sofa' ? 7 : 9);
+  for (const a of [...agents.values(), cat]) {
     if (!a.say || a.say.until < t || a.arriving) continue;
     const w = Math.ceil(ctx.measureText(a.say.text).width) + pad * 2 + u * 2, h = fs + pad * 2;
     const cxp = Math.round(ox + a.x * ws), bottom = oy + ((a.labelY ?? a.y - 20) - 2) * ws;
     const x = Math.max(4 * u, Math.min(cv.width - w - 4 * u, Math.round(cxp - w / 2))), y = Math.round(bottom - h - u * 2);
-    const fade = Math.min(1, (a.say.until - t) / 0.4, (t - (a.say.until - 4)) / 0.2);
+    const fade = Math.min(1, (a.say.until - t) / 0.4, (t - (a.say.until - (a === cat ? 3 : 4))) / 0.2);
     ctx.globalAlpha = Math.max(0, fade);
     pixelBox(x, y, w, h, u, '#f7f5ff', '#1D1A33');
     ctx.fillStyle = '#1D1A33'; ctx.fillRect(cxp - u, y + h - u, u * 3, u); ctx.fillRect(cxp, y + h, u, u * 2);

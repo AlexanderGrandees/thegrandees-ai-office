@@ -25,6 +25,7 @@ A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io
 - **Idle for 40 seconds:** it goes to relax on the sofa, the bean bags, the arcade machine or in the kitchen.
 - **Coffee breaks:** every few minutes a working bot walks to the coffee machine or the water cooler.
 - **Speech bubbles** in Ukrainian ("Привіт!", "Правлю файл", "Кава!"), never more than two at once.
+- **Murchyk the cat** sleeps on his mat, wanders around, sits next to a bot working at its desk, curls up purring beside bots on the sofa and begs at the coffee machine. Bots answer him, and little hearts float up.
 - **Taxi:** new bots arrive by taxi and get out one by one; a leaving bot waits at the curb with its phone, and the taxi picks it up. Other cars queue behind a stopped taxi.
 - **Desk lamps** switch on when a bot sits down and off when it leaves. At night the room stays warmly lit and the lamps glow.
 - **Seasons:** spring blossom and flowers, summer greenery, autumn leaves, winter snow with a Christmas tree and a snowman. Auto mode picks the season by month.
