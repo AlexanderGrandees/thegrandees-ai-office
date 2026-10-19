@@ -793,6 +793,7 @@ function leave(a) {
   if (a.brk) { if (a.spot !== a.brk.spot) a.brk.spot.owner = null; a.brk = null; }
   if (a.spot) { a.spot.owner = null; a.spot = null; }
   say(a, pick([...LINES.bye, ...LINES.byeRide[rideOf(a)]]), performance.now() / 1000, true);
+  catGreet(a, true);
 }
 const free = a => !a.leaving && !a.arriving && !a.away && !a.held && !a.brk && arrived(a);
 const resting = (a, t) => free(a) && a.status === 'idle' && a.idleSince !== null && t - a.idleSince > IDLE_TO_CHILL && a.spot && a.place === a.spot;
@@ -814,6 +815,22 @@ function cafeWith(a, t) {
 }
 let cafeSince = 0;
 // отдыхающий выходит посидеть на лавочке справа; иногда по пути его встречает бус
+// кнопка «Бусифікувати»: бус приїжджає зараз; першим під роздачу GPT, якщо він в офісі
+function busTarget() {
+  const ok = a => !a.arriving && !a.leaving && !a.away && !a.held;
+  const list = [...agents.values()].filter(ok);
+  return list.find(a => a.kind === 'chatgpt') || list.find(a => a.status !== 'working') || list[0] || null;
+}
+function busifyNow() {
+  if (bus) return;
+  const a = busTarget(), t = performance.now() / 1000;
+  if (!a) return;
+  if (a.brk) endBreak(a, t);
+  if (BENCH.owner && BENCH.owner !== a) endBreak(BENCH.owner, t);
+  BENCH.owner = a; a.brk = { spot: BENCH, until: 0, forced: true };
+  bus = { a, state: 'armed', at: t, forced: true };
+  say(a, pick(['Піду подихаю', 'Вийду на хвилинку', 'Трохи свіжого повітря']), t, true);
+}
 function goOut(a, t) {
   a.nextOut = t + outGap();
   if (cafeWith(a, t)) return;
@@ -832,7 +849,7 @@ function breakTick(a, t) {
       else say(a, pick(LINES[sp.act]), t, true);
       if (sp.act === 'coffee' || sp.act === 'tea' || a.brk.cafe) sfx.pour();
     }
-    if (a.status === 'waiting' || (a.brk.until && t > a.brk.until)) endBreak(a, t);
+    if ((a.status === 'waiting' && !a.brk.forced) || (a.brk.until && t > a.brk.until)) endBreak(a, t);
     return;
   }
   if (resting(a, t)) { if (t > a.nextOut) goOut(a, t); return; }
@@ -1328,6 +1345,7 @@ function rideStep(type, dt, t) {
         if (t >= a.exitAt) {
           a.arriving = false; a.exitAt = 0; a.x = 192; a.y = 181; a.nextSay = Math.max(a.nextSay, t + 3); r.busy = t;
           if (a.back) { a.back = false; say(a, pick(LINES.back), t, true); }
+          catGreet(a);
         }
       } else if (atCurb(a)) { agents.delete(a.id); r.busy = t; }
     }
@@ -1460,9 +1478,10 @@ function busStep(dt, t) {
   const a = bus.a, here = a && agents.has(a.id), van = bus.van;
   const ease = p => 1 - (1 - p) * (1 - p);
   if (bus.state === 'armed') {
-    if (!here || a.leaving || !a.brk || a.brk.spot !== BENCH || a.x > 290) { bus = null; return; }
+    if (!here || a.leaving || !a.brk || a.brk.spot !== BENCH || (a.x > 290 && !bus.forced)) { bus = null; return; }
+    if (bus.forced && a.x > 290 && a.y >= 173 && !a.held) { a.held = true; a.path = []; a.pending = null; a.dir = 'left'; }   // чекає на лавочку, поки ряд звільниться
     // агент вышел из двери и идёт к лавочке, ближний ряд свободен: бус выезжает
-    if (a.y > 150 && a.path.length && laneFree(-90, 260)) {
+    if (a.y > 150 && (a.path.length || a.held) && laneFree(-90, 260)) {
       bus.van = { bus: true, x: -40, y: 192, ang: 0, v: 150, dir: 1, len: VAN_LEN };
       cars.push(bus.van); bus.state = 'come';
     }
@@ -1633,6 +1652,12 @@ function catGo(place, mode, buddy = null, speed = 20) {
   if (place === cat.place && !cat.path.length) return;
   routeTo(cat, place);
 }
+// кіт біжить до дверей зустріти того, хто приїхав, або провести того, хто йде
+function catGreet(a, bye) {
+  if (cat.mode === 'greet' || (cat.toss && cat.toss.eat)) return;
+  catGo({ lane: 142, entry: [{ x: 178, y: 142 }, { x: 178, y: 151 }] }, 'greet', a, 42);
+  cat.bye = !!bye;
+}
 function catSay(text, t) { cat.say = { text, until: t + 3 }; sfx.meow(); }
 function catPlan(t) {
   const here = [...agents.values()].filter(a => !a.arriving && !a.leaving && arrived(a));
@@ -1667,8 +1692,12 @@ function catStep(dt, t) {
   const b2 = cat.buddy;
   if (!cat.until) {
     // пришёл на место
-    cat.until = t + ({ sleep: catTime(25, 70), visit: catTime(9, 15), sofa: catTime(16, 30), beg: catTime(6, 10), wander: catTime(2, 5) })[cat.mode];
+    cat.until = t + ({ sleep: catTime(12, 35), visit: catTime(9, 15), sofa: catTime(16, 30), beg: catTime(6, 10), wander: catTime(2, 5), greet: 6 })[cat.mode];
     if (b2) cat.dir = b2.x > cat.x ? 'right' : 'left';
+    if (cat.mode === 'greet') {
+      catSay(cat.bye ? 'Мяу…' : 'Мяу!', t);
+      setTimeout(() => { if (agents.has(b2.id)) say(b2, pick(cat.bye ? ['Бувай, Мурчику!', 'Не сумуй, котику'] : ['Привіт, Мурчику!', 'Мурчик зустрічає!', 'Мій котику!']), performance.now() / 1000, true); }, 900);
+    }
     if (cat.mode === 'visit') { say(b2, pick(LINES.catDesk), t, true); setTimeout(() => catSay(pick(['Мяу!', 'Мяу', 'Мрр?']), performance.now() / 1000), 1200); }
     if (cat.mode === 'sofa') { catSay('Мрр…', t); sfx.purr(); if (Math.random() < 0.6) setTimeout(() => say(b2, pick(LINES.catSofa), performance.now() / 1000, false), 1500); }
     if (cat.mode === 'beg') {
@@ -1689,8 +1718,8 @@ function catStep(dt, t) {
   if (tz && !tz.eat && t > tz.t0 + 0.7) { tz.eat = t; catSay('Ням-ням!', t); sfx.munch(); }
   if (tz && tz.eat && t > tz.eat + 2.8) cat.toss = null;
   // сердечки, пока кот рядом с агентом или їсть смаколик
-  if ((cat.mode === 'visit' || cat.mode === 'sofa' || (tz && tz.eat)) && t > cat.nextHeart) { cat.hearts.push({ x: cat.x + rand(-2, 2), y: cat.y - 9, life: 1.6 }); cat.nextHeart = t + rand(1.2, 2.6); }
-  const gone = b2 && (b2.leaving || !agents.has(b2.id) || !arrived(b2) || (cat.mode === 'beg' && !b2.brk));
+  if ((cat.mode === 'visit' || cat.mode === 'sofa' || cat.mode === 'greet' || (tz && tz.eat)) && t > cat.nextHeart) { cat.hearts.push({ x: cat.x + rand(-2, 2), y: cat.y - 9, life: 1.6 }); cat.nextHeart = t + rand(1.2, 2.6); }
+  const gone = b2 && cat.mode !== 'greet' && (b2.leaving || !agents.has(b2.id) || !arrived(b2) || (cat.mode === 'beg' && !b2.brk));
   if (t > cat.until || gone) catPlan(t);
 }
 const CAT = { base: '#e0915f', dark: '#c97a4c', light: '#f6c79a', ol: '#7a3f22' };
@@ -1993,6 +2022,7 @@ const ICON5 = {
   wind:   { rows: ['####.', '....#', '###..', '.....', '#####'], col: '#a8e4ff' },
   soundOn:  { rows: ['..#..', '.##.o', '###.o', '.##.o', '..#..'], col: '#E0DAFA', col2: '#7fe0b4' },
   soundOff: { rows: ['..#..', '.##..', '###.o', '.##..', '..#..'], col: '#6a628f', col2: '#ff5c5c' },
+  bus:      { rows: ['####.', '#oo##', '#####', '.#..#', '.....'], col: '#9aab52', col2: '#9cc8ff' },
 };
 function pixIcon(x, y, u, ic) {
   for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
@@ -2011,6 +2041,7 @@ function panel(t) {
     { key: 'season', txt: `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[season] },
     { key: 'weather', txt: `Погода: ${WEATHER_UA[weather]}${weatherPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[weather] },
     { key: 'sound', txt: soundOn ? `Звук: увімк · ${Math.round(volume * 100)}%` : 'Звук: вимк', ic: soundOn ? ICON5.soundOn : ICON5.soundOff },
+    { key: 'bus', txt: bus ? 'Бусифікація…' : busTarget()?.kind === 'chatgpt' ? 'Бусифікувати GPT' : 'Бусифікувати', ic: ICON5.bus },
   ];
   ctx.textBaseline = 'middle';
   const rows = list.map(a => {
@@ -2081,6 +2112,7 @@ addEventListener('click', e => {
   const bt = btns[btnAt(e)]; if (!bt) return;
   if (bt.key === 'season') setSeason(SEASONS[(SEASONS.indexOf(seasonPick) + 1) % SEASONS.length]);
   else if (bt.key === 'weather') setWeather(WEATHERS[(WEATHERS.indexOf(weatherPick) + 1) % WEATHERS.length]);
+  else if (bt.key === 'bus') busifyNow();
   else setSound(!soundOn);
 });
 addEventListener('mousemove', e => { hover = btnAt(e); cv.style.cursor = hover >= 0 ? 'pointer' : 'default'; });
