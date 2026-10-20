@@ -129,12 +129,12 @@ jobs:
           Stop-Transcript | Out-Null
       - name: Publish the Windows download
         if: github.ref == 'refs/heads/main'
-        shell: powershell
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git archive --format zip --prefix TGTI-AI-Office/ -o TGTI-AI-Office-windows.zip HEAD
-          gh release view windows-latest 2>$null; if ($LASTEXITCODE -ne 0) { gh release create windows-latest --title "Windows" --notes "Install: PowerShell -> irm https://raw.githubusercontent.com/${{ github.repository }}/main/windows/install.ps1 | iex  (or unzip and double-click install-windows.cmd)" }
+          gh release view windows-latest >/dev/null 2>&1 || gh release create windows-latest --title "Windows" --notes "Install: open PowerShell and run  irm https://raw.githubusercontent.com/${{ github.repository }}/main/windows/install.ps1 | iex   (or unzip TGTI-AI-Office-windows.zip and double-click install-windows.cmd)"
           gh release upload windows-latest TGTI-AI-Office-windows.zip --clobber
       - name: Show the log on failure
         if: failure()
