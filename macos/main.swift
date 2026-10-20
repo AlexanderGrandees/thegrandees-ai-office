@@ -141,7 +141,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSMenuDe
     }
 
     // ---------- notch panel ----------
-    let panelSize = NSSize(width: 640, height: 360)
+    let panelSize = NSSize(width: 768, height: 432)
 
     func notchScreen() -> NSScreen? {
         if #available(macOS 12.0, *) {
