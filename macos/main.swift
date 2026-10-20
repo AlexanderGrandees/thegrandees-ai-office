@@ -316,15 +316,21 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSMenuDe
     @objc func quit() { NSApp.terminate(nil) }
 
     // ---------- self-test (used by the build check): draws the wallpaper, saves a picture, checks the server ----------
+    func savePNG(_ img: NSImage?, _ path: String) -> Bool {
+        guard let img = img, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return false }
+        return (try? png.write(to: URL(fileURLWithPath: path))) != nil
+    }
+
     func runSelftest(_ out: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7) { [weak self] in self?.slideNotch(true) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             guard let self = self, let web = self.wallWeb else { print("SELFTEST FAIL no web view"); exit(2) }
+            self.notchWeb?.takeSnapshot(with: nil) { img, _ in
+                print("SELFTEST notchSnapshot=\(self.savePNG(img, out.replacingOccurrences(of: ".png", with: "-notch.png")))")
+            }
             web.takeSnapshot(with: nil) { img, err in
-                var ok = false
-                if let img = img, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
-                   let png = rep.representation(using: .png, properties: [:]) {
-                    ok = (try? png.write(to: URL(fileURLWithPath: out))) != nil
-                }
+                let ok = self.savePNG(img, out)
                 let state = (try? String(contentsOf: URL(string: "http://127.0.0.1:\(port)/state")!, encoding: .utf8)) ?? ""
                 print("SELFTEST snapshot=\(ok) server=\(state.contains("\"agents\"")) notchZone=\(self.hotZone().map { "\($0)" } ?? "none")")
                 print("SELFTEST state \(state.prefix(300))")

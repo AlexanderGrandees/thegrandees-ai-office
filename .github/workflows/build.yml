@@ -41,6 +41,13 @@ jobs:
             grep -q '"kind":"claude"' selftest.txt
             sleep 2; ! pgrep -f office-server.mjs
           } 2>&1 | tee -a "$RUNNER_TEMP/log.txt"
+      - name: Share the screenshots (branch ci-shots)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/shots && cp mac-wallpaper*.png /tmp/shots/ 2>/dev/null || true
+          cd /tmp/shots && git init -q && git checkout -q -b ci-shots && git add -A && git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "macOS screenshots" && git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" ci-shots || true
       - name: Uninstall
         run: |
           set -o pipefail
@@ -57,7 +64,7 @@ jobs:
           name: macos
           path: |
             TGTI-AI-Office-mac.zip
-            mac-wallpaper.png
+            mac-wallpaper*.png
       - name: Publish the macOS download
         if: github.ref == 'refs/heads/main'
         env:
