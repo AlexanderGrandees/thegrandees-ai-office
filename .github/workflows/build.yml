@@ -1,0 +1,102 @@
+# Checks the installers on real Windows and macOS machines and publishes the ready downloads.
+name: build and test
+on:
+  push:
+    branches: [main, installers]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the app
+        run: macos/build.sh build && ditto -c -k --keepParent "build/TGTI AI Office.app" TGTI-AI-Office-mac.zip
+      - name: Install (with a private Node.js copy)
+        run: TGTI_APP_ZIP="$PWD/TGTI-AI-Office-mac.zip" TGTI_FORCE_PORTABLE_NODE=1 TGTI_NO_OPEN=1 bash macos/install.sh
+      - name: Check hooks and login item
+        run: |
+          grep -q "TGTI AI Office.app/Contents/Resources/hook.mjs" ~/.claude/settings.json
+          grep -q "Application Support/TGTI AI Office/node/bin/node" ~/.claude/settings.json
+          test -f ~/Library/LaunchAgents/com.thegrandees.aioffice.plist
+      - name: Run the app (wallpaper picture + server + a fake Claude Code)
+        run: |
+          cp /bin/sleep /tmp/claude && /tmp/claude 120 &
+          "$HOME/Applications/TGTI AI Office.app/Contents/MacOS/AIOffice" --selftest "$PWD/mac-wallpaper.png" | tee selftest.txt
+          grep -q '"kind":"claude"' selftest.txt
+          sleep 2; ! pgrep -f office-server.mjs
+      - name: Uninstall
+        run: |
+          bash macos/uninstall.sh
+          test ! -e "$HOME/Applications/TGTI AI Office.app"
+          ! grep -q "hook.mjs" ~/.claude/settings.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            TGTI-AI-Office-mac.zip
+            mac-wallpaper.png
+      - name: Publish the macOS download
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view mac-latest >/dev/null 2>&1 || gh release create mac-latest --title "macOS app" --notes "Install: curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/macos/install.sh | bash"
+          gh release upload mac-latest TGTI-AI-Office-mac.zip --clobber
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install (with a private Node.js copy and a fake Wallpaper Engine folder)
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force "$env:TEMP\we\projects\myprojects" | Out-Null
+          $env:TGTI_SOURCE = "$PWD"; $env:TGTI_FORCE_PORTABLE_NODE = '1'; $env:TGTI_WE_DIR = "$env:TEMP\we"
+          & .\windows\install.ps1
+      - name: Check files, hooks, wallpaper and task
+        shell: powershell
+        run: |
+          $App = "$env:LOCALAPPDATA\TGTI-AI-Office"
+          if (-not (Test-Path "$App\node\node.exe")) { throw 'no node' }
+          if (-not (Select-String -Path "$env:USERPROFILE\.claude\settings.json" -SimpleMatch 'TGTI-AI-Office/node/node.exe' -Quiet)) { throw 'hook has no node path' }
+          foreach ($f in 'index.html', 'project.json', 'preview.jpg', 'fonts\tiny5-cyr.woff2') { if (-not (Test-Path "$env:TEMP\we\projects\myprojects\tgti-ai-office\$f")) { throw "wallpaper misses $f" } }
+          $t = Get-ScheduledTask -TaskName 'TGTI AI Office'; $t.Triggers | Format-List | Out-String | Write-Host
+          if (Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*office-server.mjs*' }) { throw 'server runs without Wallpaper Engine' }
+      - name: Server starts with Wallpaper Engine and stops after it
+        shell: powershell
+        run: |
+          Copy-Item C:\Windows\System32\PING.EXE "$env:TEMP\wallpaper64.exe"; Copy-Item C:\Windows\System32\PING.EXE "$env:TEMP\claude.exe"
+          $we = Start-Process "$env:TEMP\wallpaper64.exe" -ArgumentList '-n 600 127.0.0.1' -WindowStyle Hidden -PassThru
+          $cl = Start-Process "$env:TEMP\claude.exe" -ArgumentList '-n 600 127.0.0.1' -WindowStyle Hidden -PassThru
+          Start-ScheduledTask -TaskName 'TGTI AI Office'
+          $s = $null
+          for ($i = 0; $i -lt 30 -and -not $s; $i++) { Start-Sleep 2; try { $s = Invoke-RestMethod http://127.0.0.1:7777/state } catch {} }
+          if (-not $s) { throw 'server did not start' }
+          Start-Sleep 6; $s = Invoke-RestMethod http://127.0.0.1:7777/state
+          $s | ConvertTo-Json -Depth 4 | Write-Host
+          if (-not ($s.agents | Where-Object { $_.kind -eq 'claude' })) { throw 'fake Claude Code not seen' }
+          Stop-Process -Id $we.Id -Force
+          $gone = $false
+          for ($i = 0; $i -lt 40 -and -not $gone; $i++) { Start-Sleep 5; $gone = -not (Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*office-server.mjs*' }) }
+          if (-not $gone) { throw 'server still running after Wallpaper Engine closed' }
+          Write-Host "server stopped $($i * 5) s after Wallpaper Engine closed"
+          Stop-Process -Id $cl.Id -Force
+      - name: Uninstall
+        shell: powershell
+        run: |
+          & "$env:LOCALAPPDATA\TGTI-AI-Office\uninstall.ps1"
+          if (Test-Path "$env:LOCALAPPDATA\TGTI-AI-Office") { throw 'folder left' }
+          if (Get-ScheduledTask -TaskName 'TGTI AI Office' -ErrorAction SilentlyContinue) { throw 'task left' }
+          if (Test-Path "$env:TEMP\we\projects\myprojects\tgti-ai-office") { throw 'wallpaper left' }
+          if (Select-String -Path "$env:USERPROFILE\.claude\settings.json" -SimpleMatch 'hook.mjs' -Quiet) { throw 'hooks left' }
+      - name: Publish the Windows download
+        if: github.ref == 'refs/heads/main'
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git archive --format zip --prefix TGTI-AI-Office/ -o TGTI-AI-Office-windows.zip HEAD
+          gh release view windows-latest 2>$null; if ($LASTEXITCODE -ne 0) { gh release create windows-latest --title "Windows" --notes "Install: PowerShell -> irm https://raw.githubusercontent.com/${{ github.repository }}/main/windows/install.ps1 | iex  (or unzip and double-click install-windows.cmd)" }
+          gh release upload windows-latest TGTI-AI-Office-windows.zip --clobber

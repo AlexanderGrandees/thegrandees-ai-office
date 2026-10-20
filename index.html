@@ -2142,6 +2142,7 @@ addEventListener('mousemove', e => { hover = btnAt(e); cv.style.cursor = hover >
 let last = performance.now();
 function loop(now) {
   requestAnimationFrame(loop);
+  if (paused) { last = now; return; }               // пауза (игра на весь экран, панель на Mac спрятана): не рисуем
   const dt = (now - last) / 1000;
   if (dt < 1 / 30 - 0.002) return;                 // не чаще 30 кадров в секунду
   last = now;
@@ -2187,7 +2188,7 @@ function refreshScene() {
 refreshScene();
 weatherSince = 0;                                    // при запуске погода сразу в полную силу
 setInterval(() => { if (phaseNow() !== phase || seasonNow() !== season || weatherNow() !== weather) refreshScene(); }, 5e3);
-setInterval(poll, 2000); poll();
+setInterval(() => { if (!paused) poll(); }, 2000); poll();
 if (document.fonts) document.fonts.load('20px Tiny5 ', 'Сезон AI').catch(() => {});
 audioInit();
 requestAnimationFrame(loop);

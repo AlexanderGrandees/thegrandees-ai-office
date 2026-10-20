@@ -10,10 +10,12 @@ import { fileURLToPath } from 'node:url';
 
 const hookPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'hook.mjs').replace(/\\/g, '/');
 const remove = process.argv.includes('--remove');
+// Полный путь к node, которым запущен установщик: хуки работают, даже если node нет в PATH.
+const nodePath = process.execPath.replace(/\\/g, '/');
 
 const isOurs = h => {
   const parts = [h?.command, h?.commandWindows, ...(Array.isArray(h?.args) ? h.args : [])].map(String);
-  return h?.type === 'command' && parts.some(x => x.includes(hookPath) || (x.includes('hook.mjs') && x.includes('AI-Office')));
+  return h?.type === 'command' && parts.some(x => x.includes(hookPath) || (x.includes('hook.mjs') && /AI[- ]Office/.test(x)));
 };
 
 function readJson(file) {
@@ -45,7 +47,7 @@ function install(file, events, makeGroup) {
 // Claude Code: запуск напрямую (node + аргументы), без оболочки.
 const claudeEvents = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd'];
 install(path.join(os.homedir(), '.claude', 'settings.json'), claudeEvents, ev => {
-  const g = { hooks: [{ type: 'command', command: 'node', args: [hookPath, 'claude'], timeout: 3 }] };
+  const g = { hooks: [{ type: 'command', command: nodePath, args: [hookPath, 'claude'], timeout: 3 }] };
   if (['PreToolUse', 'PostToolUse'].includes(ev)) g.matcher = '*';
   return g;
 });
@@ -54,7 +56,7 @@ install(path.join(os.homedir(), '.claude', 'settings.json'), claudeEvents, ev =>
 const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 if (fs.existsSync(codexHome)) {
   const codexEvents = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd'];
-  const cmd = `node "${hookPath}" codex`;
+  const cmd = `"${nodePath}" "${hookPath}" codex`;
   install(path.join(codexHome, 'hooks.json'), codexEvents, () => ({ hooks: [{ type: 'command', command: cmd, commandWindows: cmd, timeout: 3 }] }));
   if (!remove) console.log('Codex: открой Codex, набери /hooks и одобри (trust) хуки AI-Office. Без этого Codex их не запускает.');
 } else {

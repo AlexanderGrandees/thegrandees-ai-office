@@ -4,6 +4,9 @@
 // 2) Хуки Claude Code и Codex присылают события (POST /event): работает, ждёт тебя, закончил.
 //    У ChatGPT и приложения Claude хуков нет: «работает» определяется по нагрузке на процессор.
 // Обои читают GET /state. Слушает только 127.0.0.1, снаружи не виден.
+// 3) Сам не висит без дела:
+//    OFFICE_WITH_WE=1 (Windows, запуск из watch.vbs): выходит, когда Wallpaper Engine закрыт и обои давно не спрашивали;
+//    OFFICE_WITH_PARENT=1 (приложение на Mac): выходит, как только закрылось приложение (закрылся stdin).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,6 +18,8 @@ const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SCAN_MS = 4000;
 const CPU_BUSY = 0.05;              // доля одного ядра, выше которой считаем, что программа «думает»
 
+const WITH_WE = process.env.OFFICE_WITH_WE === '1';
+const IDLE_MS = 30e3;               // обои не спрашивали 30 с: сканируем редко
 const LABEL = { claude: 'Claude Code', 'claude-app': 'Claude', codex: 'Codex', chatgpt: 'ChatGPT' };
 
 // ---------- процессы ----------
@@ -33,6 +38,13 @@ function kindOf(p, table) {
     const parentIsApp = parent && (parent.name || '').toLowerCase() === 'claude.exe';
     if (parentIsApp && !cmd.includes('--type=')) return 'claude';   // сессия Claude Code внутри приложения
     return 'claude-app';
+  }
+  // macOS / Linux: имена без .exe, программы лежат в *.app
+  if (!n.endsWith('.exe')) {
+    if (exe.includes('/chatgpt.app/')) return 'chatgpt';
+    if (n === 'claude') return 'claude';
+    if (/^codex/.test(n) || exe.includes('/codex.app/')) return 'codex';
+    if (exe.includes('/claude.app/')) return 'claude-app';
   }
   if (n === 'node.exe' || n === 'node') {
     if (/claude-code|@anthropic-ai[\\/]claude/.test(cmd)) return 'claude';
@@ -55,13 +67,31 @@ Get-CimInstance Win32_Process | ForEach-Object {
   });
 }
 
+// macOS и Linux: два вызова ps (путь к программе может содержать пробелы, поэтому отдельно от аргументов).
+const run = (cmd, args) => new Promise(r => execFile(cmd, args, { timeout: 10000, maxBuffer: 32e6 }, (e, out) => r(e ? null : out)));
+const secs = t => String(t).split(/[-:]/).map(Number).reverse().reduce((s, v, i) => s + v * [1, 60, 3600, 86400][i], 0);
+async function scanPosix() {
+  const [a, b] = await Promise.all([run('ps', ['-axww', '-o', 'pid=,ppid=,time=,comm=']), run('ps', ['-axww', '-o', 'pid=,args='])]);
+  if (!a || !b) return null;
+  const args = new Map();
+  for (const l of b.split('\n')) { const m = l.match(/^\s*(\d+)\s+(.*)$/); if (m) args.set(+m[1], m[2]); }
+  const list = [];
+  for (const l of a.split('\n')) {
+    const m = l.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+    if (!m) continue;
+    const exe = m[4].trim();
+    list.push({ pid: +m[1], ppid: +m[2], name: exe.split('/').pop(), exe, cmd: args.get(+m[1]) || '', cpu: secs(m[3]) });
+  }
+  return list;
+}
+
 // Для проверки на другой ОС: OFFICE_PROCS_FILE=файл.json со списком {pid, ppid, name, exe, cmd, cpu}.
 async function scanProcs() {
   if (process.env.OFFICE_PROCS_FILE) {
     try { return JSON.parse(fs.readFileSync(process.env.OFFICE_PROCS_FILE, 'utf8')); } catch { return null; }
   }
   if (process.platform === 'win32') return scanWindows();
-  return null;
+  return scanPosix();
 }
 
 let scanning = false;
@@ -72,6 +102,10 @@ async function scan() {
     const list = await scanProcs();
     lastScanOk = !!list;
     if (!list) return;
+    if (WITH_WE) {
+      const we = list.some(p => /^wallpaper(32|64)\.exe$/i.test(p.name || ''));
+      if (!we && Date.now() - lastPoll > 60e3) { console.log('Wallpaper Engine закрыт: выключаюсь.'); process.exit(0); }
+    }
     const table = new Map(list.map(p => [p.pid, p]));
     for (const p of list) p.kind = kindOf(p, table);
     procTable = table;
@@ -99,8 +133,18 @@ async function scan() {
     for (const pid of [...procAgents.keys()]) if (!roots.has(pid)) procAgents.delete(pid);
   } finally { scanning = false; }
 }
-setInterval(scan, SCAN_MS);
+// Пока обои спрашивают /state, сканируем каждые 4 с. Обои на паузе или закрыты: раз в 30 с, почти без нагрузки.
+let lastPoll = Date.now(), lastScan = 0;
+setInterval(() => {
+  const now = Date.now();
+  if (now - lastPoll < IDLE_MS || now - lastScan >= IDLE_MS) { lastScan = now; scan(); }
+}, SCAN_MS);
 scan();
+if (process.env.OFFICE_WITH_PARENT === '1') {
+  process.stdin.on('end', () => process.exit(0));
+  process.stdin.on('close', () => process.exit(0));
+  process.stdin.resume();
+}
 
 // ---------- сессии из хуков ----------
 const sessions = new Map();
@@ -191,6 +235,7 @@ function state() {
   return out;
 }
 
+const nowMs = () => Date.now();
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -210,14 +255,25 @@ http.createServer((req, res) => {
     return;
   }
   if (req.method === 'GET' && req.url.startsWith('/state')) {
+    if (nowMs() - lastPoll >= IDLE_MS) setTimeout(scan, 0);   // обои проснулись: сразу свежий список
+    lastPoll = nowMs();
     res.writeHead(200, { ...CORS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     return res.end(JSON.stringify({ agents: state(), scan: lastScanOk, now: Date.now() }));
   }
   if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/index.html'))) {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     return fs.createReadStream(path.join(DIR, 'index.html')).pipe(res);
   }
+  const font = req.method === 'GET' && req.url.match(/^\/fonts\/([\w.-]+\.woff2)$/);
+  if (font && fs.existsSync(path.join(DIR, 'fonts', font[1]))) {
+    res.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'max-age=86400' });
+    return fs.createReadStream(path.join(DIR, 'fonts', font[1])).pipe(res);
+  }
   res.writeHead(404, CORS); res.end();
+}).on('error', e => {
+  // уже запущен другой копией: тихо выходим, второй не нужен
+  if (e.code === 'EADDRINUSE') { console.log(`Порт ${PORT} уже занят: сервер офиса уже работает.`); process.exit(0); }
+  throw e;
 }).listen(PORT, '127.0.0.1', () => {
-  console.log(`AI-офис слушает http://127.0.0.1:${PORT}  (окно можно свернуть, закрывать нельзя)`);
+  console.log(`AI-офис слушает http://127.0.0.1:${PORT}`);
 });
