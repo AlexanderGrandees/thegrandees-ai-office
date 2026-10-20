@@ -2,7 +2,7 @@
   "file": "index.html",
   "preview": "preview.jpg",
   "title": "TheGrandees AI Office",
-  "description": "Пиксельный офис, где агенты — твои открытые AI-программы",
+  "description": "Піксельний офіс, де агенти — твої відкриті AI-програми",
   "type": "web",
   "general": {
     "properties": {
@@ -13,7 +13,7 @@
         "value": "auto",
         "options": [
           {
-            "label": "Авто (по месяцу)",
+            "label": "Авто (за місяцем)",
             "value": "auto"
           },
           {
