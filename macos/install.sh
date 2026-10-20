@@ -41,7 +41,8 @@ fi
 if [ -n "$NODE" ]; then say "using $NODE ($("$NODE" -v))"
 else
   say "Node.js not found: downloading a private copy of Node.js LTS (about 50 MB)"
-  VER="$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')"
+  curl -fsSL https://nodejs.org/dist/index.tab -o "$TMP/index.tab"
+  VER="$(awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}' "$TMP/index.tab")"
   ARCH="$(uname -m)"; [ "$ARCH" = "arm64" ] || ARCH="x64"
   curl -fsSL "https://nodejs.org/dist/$VER/node-$VER-darwin-$ARCH.tar.gz" -o "$TMP/node.tgz"
   rm -rf "$SUP/node"; mkdir -p "$SUP/node"
