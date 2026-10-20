@@ -2,7 +2,7 @@
 
 English · [Русский](README.ru.md)
 
-A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io/) that turns the AI tools running on your Windows PC into little office workers. Open Claude Code, Codex, ChatGPT or the Claude desktop app, and a bot arrives in its own car, sits at a desk and starts typing. Close the program, and it walks out to the curb and rides home.
+A pixel-art live wallpaper that turns the AI tools running on your computer into little office workers. On Windows it runs in [Wallpaper Engine](https://www.wallpaperengine.io/); on a Mac it is a small app that becomes your desktop wallpaper and also drops down from the MacBook notch. Open Claude Code, Codex, ChatGPT or the Claude desktop app, and a bot arrives in its own car, sits at a desk and starts typing. Close the program, and it walks out to the curb and rides home.
 
 ![Autumn night](docs/screenshots/autumn-night.png)
 
@@ -42,25 +42,42 @@ A pixel-art live wallpaper for [Wallpaper Engine](https://www.wallpaperengine.io
 - **Panel** in the top right lists every agent and what it is doing, and today's sunrise and sunset. At the bottom are two buttons: season (Auto → Spring → Summer → Autumn → Winter) and weather (Auto → Clear → Rain → Storm → Snow → Fog → Wind).
 - **Detail:** the scene is drawn at 768×432 and scaled up without smoothing, so it stays crisp pixel art at any screen size.
 
-## Requirements
-
-- Windows 10 or 11
-- [Wallpaper Engine](https://store.steampowered.com/app/431960/Wallpaper_Engine/)
-- [Node.js](https://nodejs.org/) 18 or newer (for the small local server)
-
 ## Install
 
-1. **Download** this repository (Code → Download ZIP) and unzip it to a folder that will stay where it is, for example `Desktop\TGTI-AI-Office`.
-2. **Wallpaper:** in Wallpaper Engine choose *Open Wallpaper → Open from File* and pick `index.html`.
-3. **Hooks:** double-click `install-hooks.cmd`. It adds hooks to Claude Code (`%USERPROFILE%\.claude\settings.json`) and Codex (`%USERPROFILE%\.codex\hooks.json`), keeps a backup of each file as `*.bak-…`, and leaves your other hooks alone.
-4. **Codex only:** open Codex, type `/hooks` and approve the AI-Office hooks.
-5. **Server:** double-click `start-office.cmd`. The server starts in the background with no console window.
-   - Start it automatically with Windows: `autostart.cmd` (undo with `autostart.cmd --remove`).
-   - Stop it: `stop-office.cmd`.
-   - See errors: `start-office-debug.cmd` runs it with a visible console.
-6. Restart Claude Code and Codex so they pick up the hooks.
+### Windows 10 / 11
 
-Test without any AI running: with the server on, run `node test-agent.mjs TEST` in this folder. A test bot walks in, works, asks for permission, rests and leaves.
+You need [Wallpaper Engine](https://store.steampowered.com/app/431960/Wallpaper_Engine/). Everything else is installed for you. Open **PowerShell** and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-office/main/windows/install.ps1 | iex
+```
+
+Or download `TGTI-AI-Office-windows.zip` from [Releases](https://github.com/AlexanderGrandees/thegrandees-ai-office/releases/tag/windows-latest), unzip it and double-click `install-windows.cmd`.
+
+The installer needs no admin rights. It:
+- copies the office into `%LOCALAPPDATA%\TGTI-AI-Office`;
+- uses your Node.js if you have version 18 or newer, otherwise downloads a private copy of Node.js LTS into that folder (your PATH is not changed);
+- adds the hooks for Claude Code and Codex (backups of the settings files are kept as `*.bak-…`);
+- adds the wallpaper to Wallpaper Engine: open *Installed* and pick **TheGrandees AI Office** (restart Wallpaper Engine if it is not in the list yet);
+- adds a hidden Windows task. Every minute it checks whether Wallpaper Engine is open and starts the office server if needed. The server stops by itself about a minute after Wallpaper Engine closes. There is no tray icon and no window.
+
+Codex only: open Codex, type `/hooks` and approve the AI-Office hooks once. Restart Claude Code and Codex so they pick up the hooks.
+
+### macOS 12 or newer
+
+Open **Terminal** and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-office/main/macos/install.sh | bash
+```
+
+No admin password needed. It installs `~/Applications/TGTI AI Office.app`, uses your Node.js or downloads a private copy, adds the hooks and opens the app at login.
+- The office becomes your **desktop wallpaper** (behind the desktop icons). Your normal wallpaper comes back when you quit.
+- On a MacBook with a **notch**, touch the notch with the mouse and the office drops down as a panel. Move the mouse away and it slides back.
+- The **menu bar icon** (a building) turns the wallpaper and the notch panel on or off, picks the season and weather, toggles sound, plays the busification scene, turns start-at-login on or off, and quits.
+- The office server runs only while the app is open and stops when you quit it. Drawing pauses when the wallpaper is covered or the panel is hidden, to save the battery.
+
+Test without any AI running: with the office open, run `node test-agent.mjs TEST` in the install folder. A test bot walks in, works, asks for permission, rests and leaves.
 
 ## Settings
 
@@ -74,18 +91,19 @@ Test without any AI running: with the server on, run `node test-agent.mjs TEST` 
 - The hook sends the session id, the folder name, the event name, the tool name (`Bash`, `Edit`…), a process id and one short caption of what the agent is doing: a file name, the first word or two of a command (`git push`), a site's domain, or the first 6 characters of your prompt followed by "…". Full prompts, commands and code are never sent, and nothing leaves your PC.
 - The server listens on `127.0.0.1:7777` only and is not reachable from other machines.
 - The hook always exits successfully, so it never slows down or breaks Claude Code or Codex, even when the server is off.
-- To see which programs are open, the server asks Windows for the process list through PowerShell every 4 seconds.
+- To see which programs are open, the server reads the process list every 4 seconds (PowerShell on Windows, `ps` on macOS). When the wallpaper is paused or hidden it checks only every 30 seconds.
 
 ## Remove
 
-- Hooks: `install-hooks.cmd --remove`
-- Autostart: `autostart.cmd --remove`
-- Then delete the folder.
+- Windows: `powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\TGTI-AI-Office\uninstall.ps1"`
+- macOS: `curl -fsSL https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-office/main/macos/uninstall.sh | bash`
+
+Both remove the hooks, the autostart, the wallpaper and the private Node.js copy.
 
 ## Good to know
 
-- Do not move or rename the folder after installing hooks: the hook path is saved in the settings. If you move it, run `install-hooks.cmd` again.
-- Only programs installed on the PC are visible. ChatGPT or Claude in a browser tab, claude.ai cloud sessions and phones do not show up.
+- Only programs installed on the computer are visible. ChatGPT or Claude in a browser tab, claude.ai cloud sessions and phones do not show up.
+- Running the install command again updates the office to the newest version.
 
 ## Files
 
@@ -94,9 +112,10 @@ Test without any AI running: with the server on, run `node test-agent.mjs TEST` 
 | `index.html` | the wallpaper: a 384×216 pixel scene scaled up without smoothing |
 | `office-server.mjs` | local server: watches processes, receives hook events, serves `/state` |
 | `hook.mjs` | tiny hook script called by Claude Code and Codex |
-| `install-hooks.cmd` / `.mjs` | adds or removes the hooks |
-| `start-office.cmd`, `start-office-hidden.vbs` | start the server without a window |
-| `stop-office.cmd`, `autostart.cmd`, `start-office-debug.cmd` | stop, autostart, debug |
+| `install-hooks.mjs` | adds or removes the hooks |
+| `windows/` | Windows installer, uninstaller and `watch.vbs` (starts the server while Wallpaper Engine is open) |
+| `macos/` | the Mac app (`main.swift`), its build script, installer and uninstaller |
+| `install-hooks.cmd`, `start-office*.cmd`, `stop-office.cmd`, `autostart.cmd` | manual setup from a plain folder (for development) |
 | `test-agent.mjs` | fake agent for testing |
 | `fonts/` | [Tiny5](https://github.com/Gissio/font_tiny5) pixel font (SIL Open Font License) |
 
