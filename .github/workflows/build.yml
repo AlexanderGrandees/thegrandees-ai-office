@@ -15,7 +15,7 @@ jobs:
         run: |
           set -o pipefail
           {
-            macos/build.sh build && ditto -c -k --keepParent "build/TGTI AI Office.app" TGTI-AI-Office-mac.zip
+            bash macos/build.sh build && ditto -c -k --keepParent "build/TGTI AI Office.app" TGTI-AI-Office-mac.zip
           } 2>&1 | tee -a "$RUNNER_TEMP/log.txt"
       - name: Install (with a private Node.js copy)
         run: |
