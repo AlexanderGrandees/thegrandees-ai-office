@@ -147,7 +147,7 @@ if (process.env.OFFICE_WITH_PARENT === '1') {
 }
 
 // ---------- автообновление ----------
-// Установленный офис (OFFICE_VERSION_FILE задаёт установщик) раз в 12 часов сверяет свою версию с GitHub.
+// Установленный офис (OFFICE_VERSION_FILE задаёт установщик) регулярно сверяет свою версию с GitHub.
 // Если вышла новая, тихо запускает тот же установщик: он обновит файлы и перезапустит сервер.
 const REPO = 'AlexanderGrandees/thegrandees-ai-office';
 const VERSION_FILE = process.env.OFFICE_VERSION_FILE;
@@ -163,7 +163,9 @@ async function latestVersion() {
   return r.ok ? (await r.text()).match(/([0-9a-f]{40}) refs\/heads\/main/)?.[1] : null;
 }
 const updLog = t => { try { fs.appendFileSync(path.join(path.dirname(VERSION_FILE), 'update.log'), `${new Date().toISOString()} ${t}\n`); } catch {} };
+let updatingUntil = 0;
 async function checkUpdate() {
+  if (Date.now() < updatingUntil) return;                      // установщик уже работает
   try {
     const mine = fs.readFileSync(VERSION_FILE, 'utf8').replace(/^\uFEFF/, '').trim();
     if (!mine || mine === 'local') return;                     // ручная или тестовая установка: не трогаем
@@ -171,6 +173,7 @@ async function checkUpdate() {
     if (!latest) return updLog('не смог узнать новую версию');
     if (latest === mine) return;
     updLog(`новая версия ${latest} (была ${mine}): запускаю установщик`);
+    updatingUntil = Date.now() + 5 * 60e3;
     const log = path.join(path.dirname(VERSION_FILE), 'update.log');
     if (process.platform === 'win32') {
       // установщик сам остановит этот сервер, поэтому обновление идёт отдельным скрытым процессом (update.vbs → update.ps1)
@@ -181,7 +184,10 @@ async function checkUpdate() {
     }
   } catch (e) { if (VERSION_FILE) updLog(`ошибка: ${e.message}`); }   // нет сети: попробуем позже
 }
-if (VERSION_FILE) { setTimeout(checkUpdate, 60e3); setInterval(checkUpdate, 12 * 3600e3); }
+// ПОКИ РОЗРОБЛЯЄМО: перевірка кожні 15 с, щоб нові версії приходили одразу. Після розробки повернути 12 годин.
+const UPDATE_EVERY = 15e3;
+if (VERSION_FILE) { setTimeout(checkUpdate, 15e3); setInterval(checkUpdate, UPDATE_EVERY); }
+const myVersion = () => { try { return fs.readFileSync(VERSION_FILE, 'utf8').replace(/^\uFEFF/, '').trim(); } catch { return ''; } };
 
 // ---------- сессии из хуков ----------
 const sessions = new Map();
@@ -295,7 +301,7 @@ http.createServer((req, res) => {
     if (nowMs() - lastPoll >= IDLE_MS) setTimeout(scan, 0);   // обои проснулись: сразу свежий список
     lastPoll = nowMs();
     res.writeHead(200, { ...CORS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    return res.end(JSON.stringify({ agents: state(), scan: lastScanOk, now: Date.now() }));
+    return res.end(JSON.stringify({ agents: state(), scan: lastScanOk, now: Date.now(), version: VERSION_FILE ? myVersion() : '' }));
   }
   if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/index.html'))) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });

@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v5.2';                     // показывается в панели справа; поднимать при каждом выпуске
+const APP_VERSION = 'v5.3';                     // показывается в панели справа; поднимать при каждом выпуске
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -192,7 +192,7 @@ window.wallpaperPropertyListener = {
     }
   },
   // Wallpaper Engine ставит обои на паузу, когда открыта игра на весь экран: тогда и звук молчит
-  setPaused(p) { paused = p; if (ac) { if (p) ac.suspend(); else ac.resume().catch(() => {}); } },
+  setPaused(p) { if (paused && !p) onReveal(); paused = p; if (ac) { if (p) ac.suspend(); else ac.resume().catch(() => {}); } },
 };
 
 const SKY = { night: ['#0d0b24', '#1a1540', '#2b205a'], dusk: ['#4c2b70', '#cf6566', '#f0a05a'], day: ['#5b9de3', '#8cc2f0', '#c4e2f6'] };
@@ -781,6 +781,7 @@ function wanted(a, t) {
   if (a.leaving) return a.leavePlace;
   if (!a.desk) { a.desk = DESKS.find(d => !d.owner) || null; if (a.desk) a.desk.owner = a; }
   if (a.brk) return a.brk.spot;
+  if (a.desk && (a.teaWait || a.teaCup > t)) return a.desk;
   const rest = a.status === 'idle' && a.idleSince !== null && t - a.idleSince > IDLE_TO_CHILL && !(a.yt && a.place === a.desk);
   if (!rest && a.desk) { if (a.spot) { a.spot.owner = null; a.spot = null; } return a.desk; }
   if (!a.spot) { a.spot = CHILL.find(s => !s.owner) || null; if (a.spot) a.spot.owner = a; }
@@ -853,7 +854,7 @@ function goOut(a, t) {
 // иногда агент встаёт из-за стола и идёт за кофе или чаем
 function breakTick(a, t) {
   if (a.leaving || a.arriving || a.away || a.held) return;
-  if (a.brk?.brief) { if (a.status === 'waiting') endBreak(a, t); return; }
+  if (a.brk?.brief || a.brk?.errand) { if (a.status === 'waiting' && a.brk.brief) endBreak(a, t); return; }
   if (a.brk) {
     const there = arrived(a) && a.place === a.brk.spot, sp = a.brk.spot;
     if (there && !a.brk.until) {
@@ -916,6 +917,8 @@ function step(dt, t) {
     chatTick(a, t);
   }
   briefTick(t);
+  teaTick(t);
+  queueTick(t);
   dialogTick(t);
 }
 const arrived = a => !a.path.length && !a.pending;
@@ -928,7 +931,7 @@ function activity(a, t) {
   if (atCurb(a)) return 'cab';
   if (a.leaving || !arrived(a)) return 'walk';
   if (a.brk) return a.brk.cafe ? 'cafe' : a.brk.spot.act;
-  if (a.place.desk) return a.status === 'working' ? 'work' : a.status === 'waiting' ? 'wait' : a.yt ? 'youtube' : 'desk';
+  if (a.place.desk) return a.status === 'working' ? 'work' : a.status === 'waiting' ? 'wait' : a.teaCup > t ? 'tea' : a.yt ? 'youtube' : 'desk';
   if (a.status === 'waiting') return 'wait';
   if (a.yt && a.place.act === 'tv') return 'youtube';
   if (a.place.act === 'tv' && a.idleSince !== null && t - a.idleSince > IDLE_TO_SLEEP) return 'sleep';
@@ -936,7 +939,7 @@ function activity(a, t) {
 }
 const ACT_UA = { work: 'працює', wait: 'чекає на тебе', desk: 'на місці', walk: 'йде', coffee: "п'є каву", tea: "п'є чай",
   tv: 'дивиться графіки', music: 'слухає музику', game: 'грає в аркаду', phone: 'в телефоні', sleep: 'дрімає',
-  ride: 'їде', cab: 'чекає машину', brief: 'на брифінгу', youtube: 'дивиться YouTube', bench: 'на лавочці', cafe: 'п\'є каву за столиком', army: 'на службі', check: 'перевіряють документи' };
+  ride: 'їде', cab: 'чекає машину', serve: 'несе чай', brief: 'на брифінгу', youtube: 'дивиться YouTube', bench: 'на лавочці', cafe: 'п\'є каву за столиком', army: 'на службі', check: 'перевіряють документи' };
 const RIDE_UA = { taxi: ['їде на таксі', 'чекає таксі'], tesla: ['їде на Теслі', 'сідає в Теслу'], limo: ['їде на лімузині', 'чекає лімузин'] };
 // що агент робить зараз: інструмент і коротка підпис від хуків (ім'я файлу, команда, сайт, 6 символів запиту)
 const TOOL_UA = {
@@ -989,6 +992,65 @@ function say(a, s, t, force) {
   if (!force && busy >= MAX_BUBBLES) return;
   a.say = { text: s, until: t + 4 }; a.nextSay = t + (FAST ? rand(5, 9) : rand(25, 60));
   if (!a.arriving) sfx.blip(a.kind);
+  if (GROUP[a.kind] === 'claude' && s === 'Холодно!') teaOrder(a, t);
+  if (GROUP[a.kind] === 'claude' && s === 'Що далі?') {
+    const cx = [...agents.values()].find(x => x.kind === 'codex' && avail(x));
+    if (cx && Math.random() < (HASH.includes('puss') ? 1 : 0.1)) later(t + 2.6, () => avail(cx) && say(cx, 'А далі, Клоде… Кіт у чоботях!', performance.now() / 1000, true));
+  }
+}
+// відкладені репліки: відповідь звучить після того, як попередня хмарка дочиталась
+const queue = [];
+const later = (at, fn) => queue.push({ at, fn });
+function queueTick(t) { for (let i = queue.length - 1; i >= 0; i--) if (t >= queue[i].at) { const q = queue.splice(i, 1)[0]; q.fn(); } }
+const avail = a => agents.has(a.id) && !a.leaving && !a.arriving && !a.away && !a.held;
+
+// «Холодно!» від Клода: GPT іде робити йому чай (у 20% лимончай), Клод сідає за стіл і чекає
+let tea = null;
+function teaOrder(c, t) {
+  const kettle = CHILL[9];
+  if (tea || brief || !c.desk || c.brk || !avail(c)) return;
+  const g = [...agents.values()].find(x => x.kind === 'chatgpt' && avail(x) && !x.brk && x.status !== 'waiting');
+  if (!g || kettle.owner) return;
+  tea = { c, g, state: 'ask', at: t + 2.6, lemon: Math.random() < (HASH.includes('lemon') ? 1 : 0.2) };
+}
+function teaTick(t) {
+  if (!tea) return;
+  const { c, g } = tea, kettle = CHILL[9];
+  const stop = () => { if (g.brk?.errand) endBreak(g, t); g.carry = false; c.teaWait = false; tea = null; };
+  if (!avail(c) || !avail(g) || brief || (tea.state !== 'ask' && !g.brk?.errand)) { stop(); return; }
+  if (tea.state === 'ask') {
+    if (t < tea.at) return;
+    if (kettle.owner || g.brk) { tea = null; return; }
+    if (talk && talk.who.some(x => x === c || x === g)) talk = null;
+    say(c, 'GPT, зроби чай для Клода', t, true);
+    kettle.owner = g; g.brk = { spot: kettle, until: 0, errand: true }; g.yt = null;
+    c.teaWait = true; c.yt = null;
+    tea.state = 'reply'; tea.at = t + 2.6;
+    return;
+  }
+  if (tea.state === 'reply') { if (t < tea.at) return; say(g, tea.lemon ? 'Роблю лимончай!' : 'Зараз зроблю!', t, true); tea.state = 'brew'; tea.at = 0; return; }
+  if (tea.state === 'brew') {
+    if (!(arrived(g) && g.place === kettle)) return;
+    if (!tea.at) { tea.at = t + 3.5; sfx.pour(); return; }
+    if (t < tea.at) return;
+    // несе чашку до столу Клода і стає поруч
+    const d = c.desk, x = d.cx + 10;
+    kettle.owner = null;
+    g.brk.spot = { lane: d.lane, entry: [{ x, y: d.lane + 2 }], face: 'up', sit: false, act: 'serve', owner: g };
+    g.carry = true; g.lemon = tea.lemon;
+    tea.state = 'carry'; tea.at = t + 40;
+    return;
+  }
+  if (tea.state === 'carry') {
+    const there = arrived(g) && g.place === g.brk.spot, seated = arrived(c) && c.place === c.desk;
+    if (t > tea.at) { stop(); return; }
+    if (!there || !seated) return;
+    say(g, tea.lemon ? 'Тримай лимончай, Клоде!' : 'Тримай чай, Клоде!', t, true);
+    g.carry = false; c.teaCup = t + 30; c.lemon = tea.lemon; c.teaWait = false;
+    tea.state = 'thanks'; tea.at = t + 2.6;
+    return;
+  }
+  if (tea.state === 'thanks') { if (t < tea.at) return; say(c, tea.lemon ? 'Дякую! З лимоном, як я люблю' : 'Дякую! Одразу тепліше', t, true); endBreak(g, t); tea = null; }
 }
 // діалоги між агентами: GPT і Claude підколюють один одного, Codex теж, плюс нейтральні розмови
 const GROUP = { claude: 'claude', 'claude-app': 'claude', chatgpt: 'gpt', codex: 'codex' };
@@ -1033,7 +1095,7 @@ const WORK_DIALOGS = [
 const EARLY = 1200;                                  // перші 20 хвилин після запуску розмов більше, щоб офіс одразу ожив
 let talk = null, nextTalk = FAST ? 14 : 20;
 function dialogTick(t) {
-  const ok = a => a && agents.has(a.id) && !a.arriving && !a.leaving && !a.away && !a.held && !a.brk?.cafe && !a.brk?.brief && arrived(a);
+  const ok = a => a && agents.has(a.id) && !a.arriving && !a.leaving && !a.away && !a.held && !a.brk?.cafe && !a.brk?.brief && !a.brk?.errand && arrived(a);
   if (talk) {
     // хтось пішов або пересів в іншу частину офісу: розмова обривається, їхні репліки зникають
     if (!talk.who.every(ok) || zoneOf(talk.who[0]) !== zoneOf(talk.who[1])) {
@@ -1082,7 +1144,7 @@ function briefTick(t) {
     if (talk && talk.who.some(a => crew.includes(a))) talk = null;
     crew.forEach((a, i) => {
       if (a.brk) endBreak(a, t);
-      a.yt = null;
+      a.yt = null; a.carry = false; a.teaWait = false;
       const spot = BRIEF_SPOTS[i]; spot.owner = a; a.brk = { spot, until: 0, brief: true };
     });
         brief = { at: t, lead, team: crew, state: 'gather', i: 0, next: 0, lines: [] };
@@ -1127,7 +1189,7 @@ function ytTick(a, t) {
     return;
   }
   if (t < a.nextYt) return;
-  if (!placeOk || a.status !== 'idle' || brief) { a.nextYt = t + 20; return; }
+  if (!placeOk || a.status !== 'idle' || brief || a.teaWait || a.teaCup > t) { a.nextYt = t + 20; return; }
   a.yt = { until: t + (FAST ? rand(8, 12) : rand(45, 120)) };
   say(a, pick(LINES.ytStart), t, true);
 }
@@ -1135,7 +1197,7 @@ function chatTick(a, t) {
   if (a.say && a.say.until < t) a.say = null;
   if (a.held || a.say || t < a.nextSay || a.leaving || !arrived(a)) return;
   const act = activity(a, t);
-  if (act === 'brief') return;                         // на брифінгу говорять по черзі
+  if (act === 'brief' || act === 'serve') return;      // на брифінгу говорять по черзі, з чаєм у руках не до балачок
   if (act === 'cafe') {                                // за столиком болтают по очереди
     const p = a.brk.cafe;
     if (p.say && p.say.until > t - 1) return;
@@ -1143,7 +1205,7 @@ function chatTick(a, t) {
   }
   if (act === 'work' && (a.detail || inChat(a)) && Math.random() < 0.6) { say(a, doing(a, true), t, false); return; }
   let pool = act === 'work' ? (LINES[a.tool] && Math.random() < 0.6 ? LINES[a.tool] : LINES.work) : LINES[act] || LINES.desk;
-  if ((act === 'desk' || act === 'tv' || act === 'coffee' || act === 'tea' || act === 'bench') && Math.random() < 0.25) pool = LINES.sky[weather];
+  if ((act === 'desk' || act === 'tv' || act === 'coffee' || act === 'tea' || act === 'bench') && Math.random() < 0.25) pool = season === 'winter' ? [...LINES.sky[weather], 'Холодно!'] : LINES.sky[weather];
   say(a, pick(pool), t, false);
 }
 
@@ -1178,14 +1240,15 @@ function drawBot(a, t) {
   Q(X - 8, T + 15 + armL, 2, 5, bd); Q(X - 8, T + 19 + armL, 2, 1, obd);
   Q(X + 7, T + 15 + armR, 2, 5, bd); Q(X + 7, T + 19 + armR, 2, 1, obd);
   // кружка или телефон в руке
-  if (act === 'coffee' || act === 'tea' || act === 'cafe') {
+  if (act === 'coffee' || act === 'tea' || act === 'cafe' || a.carry || a.teaCup > t) {
     const left = dir === 'left', cx = left ? X - 13 : X + 10, sip = (t * 0.5 + a.ph) % 3, cy = T + 14 + (sip < 0.5 ? -4 : 0);
     if (act === 'cafe' && sip > 1.6 && sip < 2.6) {       // кусочек шоколадки
       const by2 = T + 12 + (sip < 2.1 ? 0 : 2);
       Q(cx, by2, 5, 4, '#3b2116'); Q(cx, by2, 5, 1, '#6b3d26'); Q(cx + (left ? 3 : 0), by2 + 2, 2, 2, '#d8d8e4');
     } else {
-      const tea = act === 'tea';
+      const tea = act === 'tea' || a.carry || a.teaCup > t;
       Q(cx, cy, 4, 4, tea ? '#ffcf5c' : '#f7f5ff'); Q(cx, cy, 4, 1, tea ? '#c97a2c' : '#6b4a33'); q(left ? cx - 1 : cx + 4, cy + 1, '#d8d0f0');
+      if (tea && a.lemon && (a.carry || a.teaCup > t)) { Q(cx + (left ? 2 : 0), cy - 1, 2, 2, '#e6f04a'); q(cx + (left ? 3 : 0), cy - 1, '#9cc23a'); }
       const st = (t * 3 | 0) % 2; q(cx + 1 + st, cy - 2, 'rgba(255,255,255,0.7)'); q(cx + 2 - st, cy - 4, 'rgba(255,255,255,0.45)');
     }
   }
@@ -2284,6 +2347,22 @@ addEventListener('click', e => {
 });
 addEventListener('mousemove', e => { hover = btnAt(e); cv.style.cursor = hover >= 0 ? 'pointer' : 'default'; });
 
+// шпалери знову видно (людина згорнула вікно): хтось із офісу «повертається до роботи»
+const reveals = [];
+function onReveal() {
+  const t = performance.now() / 1000;
+  while (reveals.length && t - reveals[0] > 120) reveals.shift();
+  if (reveals.length >= 2) return;
+  const here = [...agents.values()].filter(a => avail(a) && arrived(a) && !a.brk?.brief);
+  const a = here.find(x => x.yt) || pick(here.filter(x => x.status !== 'waiting')) || null;
+  if (!a) return;
+  reveals.push(t);
+  if (a.yt) { a.yt = null; a.nextYt = t + rand(300, 900); }
+  say(a, LINES.ytDone[0], t, true);
+}
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = 1; else if (hiddenAt) { hiddenAt = 0; onReveal(); } });
+
 let last = performance.now();
 function loop(now) {
   requestAnimationFrame(loop);
@@ -2303,7 +2382,7 @@ function loop(now) {
 }
 
 // ---------- данные ----------
-let online = false;
+let online = false, seenVersion = '';
 async function poll() {
   // #leave: в демо Codex через 15 с уходит, чтобы проверить такси
   if (DEMO) { online = true; sync(DEMO_LIST.filter(x => !(HASH.includes('leave') && x.id === 'd2' && performance.now() > 15000))); return; }
@@ -2311,6 +2390,7 @@ async function poll() {
     const res = await fetch(SERVER + '/state', { cache: 'no-store', signal: AbortSignal.timeout(1500) });
     const data = await res.json();
     online = true;
+    if (data.version) { if (seenVersion && data.version !== seenVersion) { location.reload(); return; } seenVersion = data.version; }   // офіс оновився: беремо нову сторінку
     sync(withDemo(data.agents || []));
   } catch {
     online = false;
