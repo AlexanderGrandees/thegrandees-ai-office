@@ -151,27 +151,32 @@ if (process.env.OFFICE_WITH_PARENT === '1') {
 // Если вышла новая, тихо запускает тот же установщик: он обновит файлы и перезапустит сервер.
 const REPO = 'AlexanderGrandees/thegrandees-ai-office';
 const VERSION_FILE = process.env.OFFICE_VERSION_FILE;
+// Версия = коммит. Windows: последний коммит ветки main; Mac: коммит, из которого собрано готовое приложение.
+// Оба адреса не GitHub API, поэтому без лимита запросов.
 async function latestVersion() {
-  const headers = { 'user-agent': 'tgti-ai-office', accept: 'application/vnd.github+json' };
+  const headers = { 'user-agent': 'tgti-ai-office' };
   if (process.platform === 'darwin') {
-    const r = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/mac-latest`, { headers });
-    return r.ok ? (await r.json()).assets?.find(a => a.name.endsWith('.zip'))?.updated_at : null;
+    const r = await fetch(`https://github.com/${REPO}/releases/download/mac-latest/VERSION`, { headers });
+    return r.ok ? (await r.text()).trim() : null;
   }
-  const r = await fetch(`https://api.github.com/repos/${REPO}/commits/main`, { headers });
-  return r.ok ? (await r.json()).sha : null;
+  const r = await fetch(`https://github.com/${REPO}.git/info/refs?service=git-upload-pack`, { headers });
+  return r.ok ? (await r.text()).match(/([0-9a-f]{40}) refs\/heads\/main/)?.[1] : null;
 }
+const updLog = t => { try { fs.appendFileSync(path.join(path.dirname(VERSION_FILE), 'update.log'), `${new Date().toISOString()} ${t}\n`); } catch {} };
 async function checkUpdate() {
   try {
     const mine = fs.readFileSync(VERSION_FILE, 'utf8').replace(/^\uFEFF/, '').trim();
     if (!mine || mine === 'local') return;                     // ручная или тестовая установка: не трогаем
     const latest = await latestVersion();
-    if (!latest || latest === mine) return;
-    console.log(`Новая версия ${latest}: обновляюсь.`);
+    if (!latest) return updLog('не смог узнать новую версию');
+    if (latest === mine) return;
+    updLog(`новая версия ${latest} (была ${mine}): запускаю установщик`);
     const [cmd, args] = process.platform === 'win32'
       ? ['powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', `$env:TGTI_UPDATE='1'; irm https://raw.githubusercontent.com/${REPO}/main/windows/install.ps1 | iex`]]
       : ['/bin/bash', ['-c', `TGTI_UPDATE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/${REPO}/main/macos/install.sh)"`]];
-    spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-  } catch { /* нет сети или файла версии: попробуем позже */ }
+    const out = fs.openSync(path.join(path.dirname(VERSION_FILE), 'update.log'), 'a');
+    spawn(cmd, args, { detached: true, stdio: ['ignore', out, out], windowsHide: true }).unref();
+  } catch (e) { if (VERSION_FILE) updLog(`ошибка: ${e.message}`); }   // нет сети: попробуем позже
 }
 if (VERSION_FILE) { setTimeout(checkUpdate, 60e3); setInterval(checkUpdate, 12 * 3600e3); }
 

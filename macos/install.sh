@@ -55,7 +55,7 @@ printf '%s\n' "$NODE" > "$SUP/node-path"
 # version for the automatic updates (the office checks GitHub twice a day and reruns this installer quietly)
 VERSION=local
 if [ -z "${TGTI_APP_ZIP:-}" ]; then
-  VERSION="$("$NODE" -e "fetch('https://api.github.com/repos/$REPO/releases/tags/mac-latest',{headers:{'user-agent':'tgti-ai-office'}}).then(r=>r.json()).then(j=>console.log(j.assets.find(a=>a.name.endsWith('.zip')).updated_at)).catch(()=>console.log('local'))")"
+  VERSION="$(curl -fsSL "https://github.com/$REPO/releases/download/mac-latest/VERSION" 2>/dev/null || echo local)"
 fi
 printf '%s\n' "$VERSION" > "$SUP/version"
 

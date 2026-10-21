@@ -71,7 +71,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view mac-latest >/dev/null 2>&1 || gh release create mac-latest --title "macOS app" --notes "Install: curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/macos/install.sh | bash"
-          gh release upload mac-latest TGTI-AI-Office-mac.zip --clobber
+          echo "$GITHUB_SHA" > VERSION
+          gh release upload mac-latest TGTI-AI-Office-mac.zip VERSION --clobber
 
   windows:
     runs-on: windows-latest
@@ -133,7 +134,7 @@ jobs:
           Start-ScheduledTask -TaskName 'TGTI AI Office'
           $v = ''
           for ($i = 0; $i -lt 60 -and $v -ne $env:GITHUB_SHA; $i++) { Start-Sleep 5; $v = (Get-Content "$App\version.txt" -ErrorAction SilentlyContinue | Select-Object -First 1) }
-          if ($v -ne $env:GITHUB_SHA) { throw "not updated: version.txt = $v" }
+          if ($v -ne $env:GITHUB_SHA) { Get-Content "$App\update.log" -ErrorAction SilentlyContinue | Write-Host; throw "not updated: version.txt = $v" }
           $s = $null
           for ($j = 0; $j -lt 40 -and -not $s; $j++) { Start-Sleep 3; try { $s = Invoke-RestMethod http://127.0.0.1:7777/state } catch {} }
           if (-not $s) { throw 'server did not come back after the update' }
