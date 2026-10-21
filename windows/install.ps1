@@ -40,6 +40,8 @@ foreach ($f in 'index.html', 'project.json', 'office-server.mjs', 'hook.mjs', 'i
 Copy-Item (Join-Path $src 'fonts') $App -Recurse -Force
 Copy-Item (Join-Path $src 'windows\watch.vbs') $App -Force
 Copy-Item (Join-Path $src 'windows\uninstall.ps1') $App -Force
+Copy-Item (Join-Path $src 'windows\update.vbs') $App -Force
+Copy-Item (Join-Path $src 'windows\update.ps1') $App -Force
 Copy-Item (Join-Path $src 'docs\preview.jpg') $App -Force
 Say "installed into $App"
 

@@ -20,6 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
+const APP_VERSION = 'v5.0';                     // показывается в панели справа; поднимать при каждом выпуске
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -2058,7 +2059,7 @@ function panel(t) {
   const list = [...agents.values()].filter(a => !a.leaving);
   const k = kyiv(), clock = `${String(k.h).padStart(2, '0')}:${String(k.m).padStart(2, '0')}`;
   const head = 'AI-ОФІС', sub = online ? `в офісі: ${list.length}` : 'сервер не запущено';
-  const sun = sunTimes(), sunTxt = `схід ${kyivHM(sun.rise)} · захід ${kyivHM(sun.set)}`;
+  const sun = sunTimes(), sunTxt = `схід ${kyivHM(sun.rise)} · захід ${kyivHM(sun.set)} · ${APP_VERSION}`;
   const opts = [
     { key: 'season', txt: `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[season] },
     { key: 'weather', txt: `Погода: ${WEATHER_UA[weather]}${weatherPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[weather] },

@@ -173,13 +173,8 @@ async function checkUpdate() {
     updLog(`новая версия ${latest} (была ${mine}): запускаю установщик`);
     const log = path.join(path.dirname(VERSION_FILE), 'update.log');
     if (process.platform === 'win32') {
-      // установщик сам остановит этот сервер, поэтому PowerShell запускается отдельно и пишет всё в update.log
-      const ps = `$ErrorActionPreference='Continue'; $env:TGTI_UPDATE='1'; try { $s = Invoke-RestMethod -UseBasicParsing 'https://raw.githubusercontent.com/${REPO}/main/windows/install.ps1'; & ([scriptblock]::Create($s)) *>&1 | Out-File -Append -Encoding utf8 -FilePath '${log.replace(/'/g, "''")}' } catch { $_ | Out-File -Append -Encoding utf8 -FilePath '${log.replace(/'/g, "''")}' }`;
-      const ch = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-NonInteractive', '-Command', `'start' | Out-File -Append -Encoding utf8 -FilePath '${log.replace(/'/g, "''")}'; ` + ps], { stdio: 'ignore', windowsHide: true });   // не detached: без своей консоли PowerShell сразу выходит
-      ch.on('error', e => updLog(`powershell не запустился: ${e.message}`));
-      ch.on('exit', c => updLog(`powershell завершился с кодом ${c}`));
-      updLog(`powershell pid ${ch.pid}`);
-      ch.unref();
+      // установщик сам остановит этот сервер, поэтому обновление идёт отдельным скрытым процессом (update.vbs → update.ps1)
+      spawn('wscript.exe', [path.join(path.dirname(VERSION_FILE), 'update.vbs')], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     } else {
       const out = fs.openSync(log, 'a');
       spawn('/bin/bash', ['-c', `curl -fsSL https://raw.githubusercontent.com/${REPO}/main/macos/install.sh | TGTI_UPDATE=1 bash`], { detached: true, stdio: ['ignore', out, out] }).unref();
