@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v5.5';                     // показывается в панели справа; поднимать при каждом выпуске
+const APP_VERSION = 'v5.6';                     // показывается в панели справа; поднимать при каждом выпуске
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -192,7 +192,7 @@ window.wallpaperPropertyListener = {
     }
   },
   // Wallpaper Engine ставит обои на паузу, когда открыта игра на весь экран: тогда и звук молчит
-  setPaused(p) { if (paused && !p) onReveal(); paused = p; if (ac) { if (p) ac.suspend(); else ac.resume().catch(() => {}); } },
+  setPaused(p) { paused = p; if (ac) { if (p) ac.suspend(); else ac.resume().catch(() => {}); } },
 };
 
 const SKY = { night: ['#0d0b24', '#1a1540', '#2b205a'], dusk: ['#4c2b70', '#cf6566', '#f0a05a'], day: ['#5b9de3', '#8cc2f0', '#c4e2f6'] };
@@ -2359,22 +2359,6 @@ addEventListener('click', e => {
   else setSound(!soundOn);
 });
 addEventListener('mousemove', e => { hover = btnAt(e); cv.style.cursor = hover >= 0 ? 'pointer' : 'default'; });
-
-// шпалери знову видно (людина згорнула вікно): хтось із офісу «повертається до роботи»
-const reveals = [];
-function onReveal() {
-  const t = performance.now() / 1000;
-  while (reveals.length && t - reveals[0] > 120) reveals.shift();
-  if (reveals.length >= 2) return;
-  const here = [...agents.values()].filter(a => avail(a) && arrived(a) && !a.brk?.brief);
-  const a = here.find(x => x.yt) || pick(here.filter(x => x.status !== 'waiting')) || null;
-  if (!a) return;
-  reveals.push(t);
-  if (a.yt) { a.yt = null; a.nextYt = t + rand(300, 900); }
-  say(a, LINES.ytDone[0], t, true);
-}
-let hiddenAt = 0;
-document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = 1; else if (hiddenAt) { hiddenAt = 0; onReveal(); } });
 
 let last = performance.now();
 function loop(now) {
