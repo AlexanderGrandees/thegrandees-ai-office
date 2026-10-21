@@ -19,6 +19,7 @@ step() { printf '\n\033[36m> %s\033[0m\n' "$*"; }
 printf '\n\033[35mTGTI AI Office: installing\033[0m\n'
 [ "$(uname)" = "Darwin" ] || { echo "This installer is for macOS."; exit 1; }
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+FRESH=1; [ -f "$SUP/version" ] && FRESH=0   # first install on this Mac (updates rerun this script)
 
 step "Downloading the app"
 pkill -x AIOffice 2>/dev/null || true
@@ -74,6 +75,11 @@ cat > "$AGENT" <<PLIST
 </dict></plist>
 PLIST
 say "the app opens after login (switch it off in the menu bar icon > Запускати при вході)"
+
+# anonymous install counter: on the first install only, download a tiny empty file from GitHub; the author sees only its download count (nothing is sent)
+if [ "$FRESH" = 1 ] && [ -z "${GITHUB_ACTIONS:-}" ]; then
+  curl -fsSL -m 10 "https://github.com/$REPO/releases/download/stats/install-mac.txt" -o /dev/null 2>/dev/null || true
+fi
 
 if [ -z "${TGTI_NO_OPEN:-}" ]; then open "$APP"; fi
 printf '\n\033[32mDone.\033[0m\n'

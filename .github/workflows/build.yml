@@ -161,6 +161,11 @@ jobs:
           git archive --format zip --prefix TGTI-AI-Office/ --add-file=VERSION -o TGTI-AI-Office-windows.zip HEAD
           gh release view windows-latest >/dev/null 2>&1 || gh release create windows-latest --title "Windows" --notes "Install: open PowerShell and run  irm https://raw.githubusercontent.com/${{ github.repository }}/main/windows/install.ps1 | iex   (or unzip TGTI-AI-Office-windows.zip and double-click install-windows.cmd)"
           gh release upload windows-latest TGTI-AI-Office-windows.zip --clobber
+          # install counter: created once and never re-uploaded, so its download count keeps growing (installers fetch it on the first install only)
+          if ! gh release view stats >/dev/null 2>&1; then
+            printf ' ' > install-windows.txt; printf ' ' > install-mac.txt
+            gh release create stats install-windows.txt install-mac.txt --latest=false --title "Install counter" --notes "Tiny files the installers download once, on the first install only, so the author can see how many people installed the office. Nothing is sent."
+          fi
       - name: Show the log on failure
         if: failure()
         shell: powershell

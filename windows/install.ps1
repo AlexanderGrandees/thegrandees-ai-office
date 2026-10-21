@@ -17,6 +17,7 @@ $Task = 'TGTI AI Office'
 function Say($t) { Write-Host "  $t" }
 function Step($t) { Write-Host "`n> $t" -ForegroundColor Cyan }
 Write-Host "`nTGTI AI Office: installing" -ForegroundColor Magenta
+$fresh = -not (Test-Path "$App\version.txt")   # first install on this PC (updates rerun this script)
 
 # 1. files
 Step 'Downloading the office'
@@ -151,6 +152,10 @@ catch { Register-ScheduledTask -TaskName $Task -Action $action -Trigger $every -
 Say 'the server starts by itself while Wallpaper Engine is open and stops when it closes (no tray icon, no window)'
 Start-Process wscript.exe -ArgumentList "`"$App\watch.vbs`"" -WorkingDirectory $App
 
+# anonymous install counter: on the first install only, download a tiny empty file from GitHub; the author sees only its download count (nothing is sent)
+if ($fresh -and -not $env:GITHUB_ACTIONS) {
+  try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 "https://github.com/$Repo/releases/download/stats/install-windows.txt" | Out-Null } catch { }
+}
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "`nDone." -ForegroundColor Green
 Say 'Open Wallpaper Engine > Installed > "TheGrandees AI Office".'

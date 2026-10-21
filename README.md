@@ -46,6 +46,9 @@ A pixel-art live wallpaper that turns the AI tools running on your computer into
 
 ## Install
 
+The installer downloads one tiny empty file from this repo's releases on the first install, so the author can count installs. Nothing about you or your computer is sent.
+
+
 ### Windows 10 / 11
 
 You need [Wallpaper Engine](https://store.steampowered.com/app/431960/Wallpaper_Engine/). Everything else is installed for you. Open **PowerShell** and paste:
