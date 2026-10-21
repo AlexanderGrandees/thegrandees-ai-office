@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v5.9';                     // показывается в панели справа; поднимать при каждом выпуске
+const APP_VERSION = 'v5.10';                     // показывается в панели справа; поднимать при каждом выпуске
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -2273,6 +2273,7 @@ function panel(t) {
   const list = [...agents.values()].filter(a => !a.leaving);
   const k = kyiv(), clock = `${String(k.h).padStart(2, '0')}:${String(k.m).padStart(2, '0')}`;
   const head = 'AI-ОФІС', sub = online ? `в офісі: ${list.length}` : demoOn ? 'демо · сервер не запущено' : 'сервер не запущено';
+  const hint = online ? '' : 'Свої ШІ: див. опис Workshop';   // без сервера: підказка, як підключити своїх
   const sun = sunTimes(), sunTxt = `схід ${kyivHM(sun.rise)} · захід ${kyivHM(sun.set)} · ${APP_VERSION}`;
   const opts = [
     { key: 'season', txt: `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[season] },
@@ -2311,9 +2312,9 @@ function panel(t) {
     for (const r of rows) w = Math.max(w, ctx.measureText(r.name).width + 9 * u);
     ctx.font = `${small}px ${FONT_UI}`;
     for (const r of rows) w = Math.max(w, ctx.measureText(r.st).width + 9 * u);
-    w = Math.round(Math.max(w, ctx.measureText(sub).width, ctx.measureText(sunTxt).width, optW, 120 * dpr) + pad * 2);
+    w = Math.round(Math.max(w, ctx.measureText(sub).width, ctx.measureText(sunTxt).width, ctx.measureText(hint).width, optW, 120 * dpr) + pad * 2);
     const headH = lh + 2 * u, rowH = Math.round(lh * 1.55);
-    const h = pad + headH + u * 3 + Math.max(1, rows.length) * rowH + u * 2 + lh + u * 2 + btnH * lines.length + gap * (lines.length - 1) + pad;
+    const h = pad + headH + u * 3 + Math.max(1, rows.length) * rowH + u * 2 + (hint ? lh + u : 0) + lh + u * 2 + btnH * lines.length + gap * (lines.length - 1) + pad;
     const x = cv.width - w - 12 * u, y = 12 * u;
     ctx.globalAlpha = 0.94;
     pixelBox(x - u, y - u, w + 2 * u, h + 2 * u, u, '#4A37C9', 'rgba(74,55,201,0.35)');
@@ -2345,6 +2346,7 @@ function panel(t) {
       ry += rowH;
     }
     ry += u * 2;
+    if (hint) { ctx.fillStyle = '#ffcf5c'; ctx.fillText(hint, x + pad, ry + lh / 2); ry += lh + u; }
     ctx.fillStyle = '#9a92c4'; ctx.fillText(sunTxt, x + pad, ry + lh / 2);
     ry += lh + u * 2;
     btns = place(x + pad - u * 2, ry, w - pad * 2 + u * 4);
@@ -2400,18 +2402,21 @@ async function poll() {
   try {
     const res = await fetch(SERVER + '/state', { cache: 'no-store', signal: AbortSignal.timeout(1500) });
     const data = await res.json();
-    online = true;
+    online = true; demoAuto();
     if (data.version) { if (seenVersion && data.version !== seenVersion) { location.reload(); return; } seenVersion = data.version; }   // офіс оновився: беремо нову сторінку
     sync(withDemo(data.agents || []));
   } catch {
-    online = false;
+    online = false; demoAuto();
     sync(withDemo([]));
   }
 }
 // демо-моделі: заповнюють офіс, коли на комп'ютері немає справжніх. Щойно справжня модель тієї ж команди
 // з'являється онлайн, її демо-двійник іде додому, а в офіс заходить справжня
-let demoOn = store.get('office-demo') === 'on';      // за замовчуванням вимкнено
-function setDemo(on) { demoOn = on; store.set('office-demo', on ? 'on' : 'off'); poll(); }
+// демо: якщо людина сама не вибрала, вмикається тільки коли сервер не запущений (шпалери з Workshop без установки),
+// щоб офіс не стояв порожній; з сервером за замовчуванням вимкнене
+let demoPref = store.get('office-demo'), demoOn = false;
+const demoAuto = () => { demoOn = demoPref === 'on' || (demoPref !== 'off' && !online); };
+function setDemo(on) { demoPref = on ? 'on' : 'off'; store.set('office-demo', demoPref); demoAuto(); poll(); }
 const DEMO_BOTS = [
   { id: 'demo-claude', kind: 'claude', name: 'Claude Code · демо', hooks: true },
   { id: 'demo-codex', kind: 'codex', name: 'Codex · демо', hooks: true },
