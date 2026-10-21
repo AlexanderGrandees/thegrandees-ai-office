@@ -103,7 +103,19 @@ if ($we) {
   $wall = Join-Path $we 'projects\myprojects\tgti-ai-office'
   try {
     New-Item -ItemType Directory -Force -Path $wall | Out-Null
+    # keep the Steam Workshop id that Wallpaper Engine wrote after publishing, so updates go to the same Workshop item
+    $wsid = $null
+    if (Test-Path "$wall\project.json") {
+      $m = [regex]::Match([IO.File]::ReadAllText("$wall\project.json"), '"workshopid"\s*:\s*"?(\d+)"?')
+      if ($m.Success) { $wsid = $m.Groups[1].Value }
+    }
     foreach ($f in 'index.html', 'project.json', 'preview.jpg') { Copy-Item "$App\$f" $wall -Force }
+    if ($wsid) {
+      $pj = [IO.File]::ReadAllText("$wall\project.json")
+      $pj = $pj.Substring(0, $pj.IndexOf('{') + 1) + "`n  `"workshopid`": `"$wsid`"," + $pj.Substring($pj.IndexOf('{') + 1)
+      [IO.File]::WriteAllText("$wall\project.json", $pj, (New-Object Text.UTF8Encoding $false))
+      Say "kept Steam Workshop id $wsid"
+    }
     Copy-Item "$App\fonts" $wall -Recurse -Force
     Set-Content -Path "$App\we-path.txt" -Value $wall -Encoding Unicode
     Say "added: $wall"

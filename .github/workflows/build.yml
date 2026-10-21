@@ -95,6 +95,11 @@ jobs:
           foreach ($f in 'index.html', 'project.json', 'preview.jpg', 'fonts\tiny5-cyr.woff2') { if (-not (Test-Path "$env:TEMP\we\projects\myprojects\tgti-ai-office\$f")) { throw "wallpaper misses $f" } }
           $t = Get-ScheduledTask -TaskName 'TGTI AI Office'; $t.Triggers | Format-List | Out-String | Write-Host
           if (Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*office-server.mjs*' }) { throw 'server runs without Wallpaper Engine' }
+          $pj = "$env:TEMP\we\projects\myprojects\tgti-ai-office\project.json"
+          [IO.File]::WriteAllText($pj, [IO.File]::ReadAllText($pj).Replace('"file"', '"workshopid": "1234567", "file"'))
+          $env:TGTI_SOURCE = "$PWD"; $env:TGTI_WE_DIR = "$env:TEMP\we"; & .\windows\install.ps1
+          if (-not (Select-String -Path $pj -SimpleMatch '"workshopid": "1234567"' -Quiet)) { throw 'workshop id lost on update' }
+          Get-Content $pj -Encoding UTF8 | Select-Object -First 5 | Write-Host
           Stop-Transcript | Out-Null
       - name: Server starts with Wallpaper Engine and stops after it
         shell: powershell
