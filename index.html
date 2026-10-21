@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v5.7';                     // показывается в панели справа; поднимать при каждом выпуске
+const APP_VERSION = 'v5.8';                     // показывается в панели справа; поднимать при каждом выпуске
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -880,6 +880,7 @@ function breakTick(a, t) {
     if ((a.status === 'waiting' && !a.brk.forced) || (a.brk.until && t > a.brk.until && !midChat)) endBreak(a, t);
     return;
   }
+  if (brief) return;                                   // кличуть на брифінг: нікуди самі не йдемо
   if (resting(a, t)) { if (t > a.nextOut && settled(a, t)) goOut(a, t); return; }
   if (t < a.nextBreak || !settled(a, t)) return;
   if (!(a.desk && arrived(a) && a.place === a.desk && a.status !== 'waiting')) { a.nextBreak = t + 15; return; }
@@ -1000,11 +1001,12 @@ const LINES = {
 const MAX_BUBBLES = 2;
 let cafeLine = false;
 function say(a, s, t, force) {
+  if (a.brk?.brief && brief?.state === 'talk' && !cafeLine) return;                                  // на брифінгу говорять тільки по черзі
   const c = a.brk?.chat;
   if (c && !cafeLine && c.i < c.lines.length && a.brk.cafe?.brk?.chat === c && c.i > 0) return;   // посеред розмови за столиком сторонні репліки не вклинюються
   const busy = [...agents.values()].filter(x => x !== a && x.say && x.say.until > t).length;
   if (!force && busy >= MAX_BUBBLES) return;
-  a.say = { text: s, until: t + 4 }; a.nextSay = t + (FAST ? rand(5, 9) : rand(25, 60));
+  a.say = { text: s, until: t + 4.8, at: t }; a.nextSay = t + (FAST ? rand(5, 9) : rand(25, 60));
   if (!a.arriving) sfx.blip(a.kind);
   if (GROUP[a.kind] === 'claude' && s === 'Холодно!') teaOrder(a, t);
   if (GROUP[a.kind] === 'claude' && s === 'Що далі?') {
@@ -1120,7 +1122,7 @@ function dialogTick(t) {
     const sp = talk.who[talk.i % 2];
     say(sp, talk.lines[talk.i], t, true); sp.say.talk = true; sp.nextSay = t + 12;
     if (++talk.i >= talk.lines.length) { talk = null; nextTalk = t + (FAST ? rand(15, 25) : t < EARLY ? rand(20, 45) : rand(90, 220)); }
-    else talk.next = t + 2.9;
+    else talk.next = t + 3.8;
     return;
   }
   if (t < nextTalk) return;
@@ -1151,24 +1153,43 @@ function briefTick(t) {
   if (!brief) {
     if (t < briefNext) return;
     if (bus) { briefNext = t + 30; return; }
-    const team = [...agents.values()].filter(a => !a.leaving && !a.arriving && !a.away && !a.held && a.status !== 'waiting' && !a.brk && !(tea && (tea.c === a || tea.g === a)));
+    const team = [...agents.values()].filter(a => avail(a) && a.status !== 'waiting' && !a.brk?.forced);
     if (team.length < 2) { briefNext = t + 60; return; }
-    const lead = BRIEF_LEAD.map(gr => team.find(a => GROUP[a.kind] === gr)).find(Boolean) || team[0];
+    // ведучий — той, хто зараз вільний (Claude, потім Codex, потім GPT)
+    const freeNow = team.filter(a => !a.brk && !(tea && (tea.c === a || tea.g === a)));
+    const lead = BRIEF_LEAD.map(gr => freeNow.find(a => GROUP[a.kind] === gr)).find(Boolean) || freeNow[0];
+    if (!lead) { briefNext = t + 20; return; }
     const crew = [lead, ...team.filter(a => a !== lead)].slice(0, BRIEF_SPOTS.length);
     if (talk && talk.who.some(a => crew.includes(a))) talk = null;
-    crew.forEach((a, i) => {
-      if (a.brk) endBreak(a, t);
-      a.carry = false; a.teaWait = false;
-      const spot = BRIEF_SPOTS[i]; spot.owner = a; a.brk = { spot, until: 0, brief: true };
-    });
-        brief = { at: t, lead, team: crew, state: 'gather', i: 0, next: 0, lines: [] };
+    brief = { at: t, lead, team: [], called: crew.map((a, i) => ({ a, spot: BRIEF_SPOTS[i] })), state: 'gather', i: 0, next: 0, lines: [] };
+    const ls = brief.called[0]; ls.spot.owner = lead; lead.brk = { spot: ls.spot, until: 0, brief: true }; brief.team.push(lead);
     say(lead, pick(['Збираємось на брифінг!', 'Брифінг, усі сюди!', 'Команда, на брифінг!']), t, true);
     return;
   }
+  // покликані йдуть на брифінг, коли доробили свою справу: допили, договорили, віддали чай
+  for (const c of brief.called) {
+    const a = c.a;
+    if (!avail(a) || a.status === 'waiting') { c.done = true; continue; }
+    if (c.done || a.brk?.brief) continue;
+    const midChat = a.brk?.chat && a.brk.chat.i < a.brk.chat.lines.length;
+    const busyNow = (a.say && a.say.until > t) || midChat || (tea && (tea.c === a || tea.g === a)) || (a.brk && !arrived(a)) || a.brk?.forced
+      || (a.brk?.until > t && a.brk.until - t < 20);              // допиває каву: недовго, хай доп'є
+    if (busyNow && t - brief.at < 50) continue;
+    if (a.brk?.forced) { c.done = true; continue; }
+    const wasBusy = !!a.brk;
+    if (a.brk) endBreak(a, t);
+    a.carry = false; a.teaWait = false;
+    c.spot.owner = a; a.brk = { spot: c.spot, until: 0, brief: true };
+    brief.team.push(a);
+    if (a !== brief.lead && wasBusy) say(a, pick(['Іду!', 'Вже йду', 'Біжу на брифінг']), t, true);
+  }
   brief.team = brief.team.filter(a => agents.has(a.id) && a.brk?.brief);
-  if (!brief.team.includes(brief.lead) || brief.team.length < 2) { endBrief(t); return; }
+  const waiting = brief.called.some(c => !c.done && !c.a.brk?.brief);
+  if (!brief.team.includes(brief.lead) || (!waiting && brief.team.length < 2)) { endBrief(t); return; }
   if (brief.state === 'gather') {
-    if (!brief.team.every(a => arrived(a) && a.place === a.brk.spot) && t - brief.at < 45) return;
+    if ((waiting || !brief.team.every(a => arrived(a) && a.place === a.brk.spot)) && t - brief.at < 70) return;
+    if (brief.team.length < 2) { endBrief(t); return; }
+    for (const c of brief.called) c.done = true;                // хто не встиг, той пропускає
     const L = brief.lead, lines = [[L, pick(['Отже, коротко по задачах', 'Стендап! По черзі, коротко', 'Що в кого? Коротко'])]];
     for (const a of brief.team.filter(a => a !== L).slice(0, 3)) {
       lines.push([L, `${voc(a)}${a.tagNo > 1 ? ' ' + a.tagNo : ''}, що в тебе?`]);
@@ -1181,8 +1202,8 @@ function briefTick(t) {
   if (t < brief.next) return;
   if (brief.i >= brief.lines.length) { endBrief(t); return; }
   const [who, text] = brief.lines[brief.i++];
-  if (brief.team.includes(who)) { say(who, text, t, true); who.nextSay = t + 10; }
-  brief.next = t + 2.9;
+  if (brief.team.includes(who)) { cafeLine = true; say(who, text, t, true); cafeLine = false; who.nextSay = t + 10; }
+  brief.next = t + 3.8;
 }
 function endBrief(t) {
   for (const a of brief.team) if (a.brk?.brief) endBreak(a, t);
@@ -1218,7 +1239,7 @@ function cafeChat(a, t) {
   if (c.i >= c.lines.length || t < c.next) return;
   const sp = c.who[c.i % 2];
   cafeLine = true; say(sp, c.lines[c.i++], t, true); cafeLine = false;
-  c.next = t + 4.3;
+  c.next = t + 5.2;
 }
 function chatTick(a, t) {
   if (a.say && a.say.until < t) a.say = null;
@@ -2211,7 +2232,7 @@ function bubbles(t) {
     const w = Math.ceil(ctx.measureText(a.say.text).width) + pad * 2 + u * 2, h = fs + pad * 2;
     const cxp = Math.round(ox + a.x * ws), bottom = oy + ((a.labelY ?? a.y - 20) - 2) * ws;
     const x = Math.max(4 * u, Math.min(cv.width - w - 4 * u, Math.round(cxp - w / 2))), y = Math.round(bottom - h - u * 2);
-    const fade = Math.min(1, (a.say.until - t) / 0.4, (t - (a.say.until - (a === cat ? 3 : 4))) / 0.2);
+    const fade = Math.min(1, (a.say.until - t) / 0.4, (t - (a.say.at ?? a.say.until - (a === cat ? 3 : 4))) / 0.2);
     ctx.globalAlpha = Math.max(0, fade);
     pixelBox(x, y, w, h, u, '#f7f5ff', '#1D1A33');
     ctx.fillStyle = '#1D1A33'; ctx.fillRect(cxp - u, y + h - u, u * 3, u); ctx.fillRect(cxp, y + h, u, u * 2);
