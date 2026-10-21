@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v5.1';                     // показывается в панели справа; поднимать при каждом выпуске
+const APP_VERSION = 'v5.2';                     // показывается в панели справа; поднимать при каждом выпуске
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -2188,8 +2188,8 @@ function panel(t) {
     { key: 'season', txt: `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[season] },
     { key: 'weather', txt: `Погода: ${WEATHER_UA[weather]}${weatherPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[weather] },
     { key: 'sound', txt: soundOn ? `Звук: увімк · ${Math.round(volume * 100)}%` : 'Звук: вимк', ic: soundOn ? ICON5.soundOn : ICON5.soundOff },
-    { key: 'bus', txt: bus ? 'Бусифікація…' : busTarget()?.kind === 'chatgpt' ? 'Бусифікувати GPT' : 'Бусифікувати', ic: ICON5.bus, half: true },
-    { key: 'demo', txt: demoOn ? 'Демо: увімк' : 'Демо: вимк', ic: demoOn ? ICON5.demoOn : ICON5.demoOff, half: true },
+    { key: 'bus', txt: bus ? 'Бусифікація…' : busTarget()?.kind === 'chatgpt' ? 'Бусифікувати GPT' : 'Бусифікувати', ic: ICON5.bus, half: true, short: bus ? 'Бусифікація…' : 'Бусифікувати' },
+    { key: 'demo', txt: 'Демо', ic: demoOn ? ICON5.demoOn : ICON5.demoOff, half: true, compact: true },
   ];
   ctx.textBaseline = 'middle';
   const rows = list.map(a => {
@@ -2200,10 +2200,20 @@ function panel(t) {
   ctx.font = `${small}px ${FONT_UI}`;
   const lines = [];                                  // ряди кнопок: дві «половинки» стають поруч
   for (const o of opts) { const l = lines.at(-1); if (o.half && l && l[0].half && l.length < 2) l.push(o); else lines.push([o]); }
-  const optW = Math.max(...lines.map(l => l.reduce((s, o) => s + ctx.measureText(o.txt).width + 16 * u, 0) + gap * (l.length - 1)));
+  // компактна кнопка займає рівно свій текст, решту ряду віддаємо сусідці; ряд не робить панель ширшою, ніж коротка назва
+  const btnW = o => ctx.measureText(o.short || o.txt).width + (o.compact ? 15 : 16) * u;
+  const optW = Math.max(...lines.map(l => l.reduce((s, o) => s + btnW(o), 0) + gap * (l.length - 1)));
   const place = (x0, y0, bw) => lines.flatMap((l, i) => {
-    const each = (bw - gap * (l.length - 1)) / l.length;
-    return l.map((o, j) => ({ ...o, x: Math.round(x0 + j * (each + gap)), y: y0 + i * (btnH + gap), w: Math.round(each), h: btnH }));
+    ctx.font = `${small}px ${FONT_UI}`;
+    const fixed = l.filter(o => o.compact).reduce((s, o) => s + btnW(o), 0), flex = l.filter(o => !o.compact).length;
+    const each = (bw - gap * (l.length - 1) - fixed) / Math.max(1, flex);
+    let x = x0;
+    return l.map(o => {
+      const w = Math.round(o.compact ? btnW(o) : each), bt = { ...o, x: Math.round(x), y: y0 + i * (btnH + gap), w, h: btnH };
+      if (o.short && ctx.measureText(o.txt).width + 13 * u > w) bt.txt = o.short;   // довга назва не влазить: коротка
+      x += w + gap;
+      return bt;
+    });
   });
   if (SHOW_HUD) {
     ctx.font = `${fs}px ${FONT_UI}`;
@@ -2309,7 +2319,7 @@ async function poll() {
 }
 // демо-моделі: заповнюють офіс, коли на комп'ютері немає справжніх. Щойно справжня модель тієї ж команди
 // з'являється онлайн, її демо-двійник іде додому, а в офіс заходить справжня
-let demoOn = store.get('office-demo') !== 'off';
+let demoOn = store.get('office-demo') === 'on';      // за замовчуванням вимкнено
 function setDemo(on) { demoOn = on; store.set('office-demo', on ? 'on' : 'off'); poll(); }
 const DEMO_BOTS = [
   { id: 'demo-claude', kind: 'claude', name: 'Claude Code · демо', hooks: true },
