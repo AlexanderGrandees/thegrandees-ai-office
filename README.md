@@ -4,6 +4,8 @@ English · [Русский](README.ru.md)
 
 A pixel-art live wallpaper that turns the AI tools running on your computer into little office workers. On Windows it runs in [Wallpaper Engine](https://www.wallpaperengine.io/); on a Mac it is a small app that becomes your desktop wallpaper and also drops down from the MacBook notch. Open Claude Code, Codex, ChatGPT or the Claude desktop app, and a bot arrives in its own car, sits at a desk and starts typing. Close the program, and it walks out to the curb and rides home.
 
+**Steam Workshop:** [subscribe to TheGrandees AI Office](https://steamcommunity.com/sharedfiles/filedetails/?id=3823996127). To see your own AI tools in the office, run the installer below once.
+
 ![Autumn night](docs/screenshots/autumn-night.png)
 
 | | |
