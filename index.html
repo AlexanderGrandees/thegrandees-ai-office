@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v5.4';                     // показывается в панели справа; поднимать при каждом выпуске
+const APP_VERSION = 'v5.5';                     // показывается в панели справа; поднимать при каждом выпуске
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -834,10 +834,20 @@ function busTarget() {
   const list = [...agents.values()].filter(ok);
   return list.find(a => a.kind === 'chatgpt') || list.find(a => a.status !== 'working') || list[0] || null;
 }
-function busifyNow() {
-  if (bus) return;
-  const a = busTarget(), t = performance.now() / 1000;
-  if (!a) return;
+// кнопку натиснули: бус чекає, поки агент доп'є, договорить або дограє сцену (не довше 30 с), і тільки тоді їде
+let busWant = 0;
+function busifyNow() { if (!bus && !busWant && busTarget()) busWant = performance.now() / 1000; }
+function busWantTick(t) {
+  if (!busWant || bus) return;
+  const a = busTarget();
+  if (!a) { busWant = 0; return; }
+  const scene = (a.brk && a.brk.spot !== BENCH && (a.brk.brief || a.brk.errand || a.brk.cafe || !arrived(a) || (a.brk.until && t < a.brk.until)))
+    || (tea && (tea.c === a || tea.g === a)) || (talk && talk.who.includes(a)) || (a.say && a.say.until > t) || !arrived(a);
+  if (scene && t - busWant < 30) return;
+  busWant = 0;
+  busifyStart(a, t);
+}
+function busifyStart(a, t) {
   if (a.brk) endBreak(a, t);
   if (BENCH.owner && BENCH.owner !== a) endBreak(BENCH.owner, t);
   BENCH.owner = a; a.brk = { spot: BENCH, until: 0, forced: true };
@@ -917,6 +927,7 @@ function step(dt, t) {
     chatTick(a, t);
   }
   briefTick(t);
+  busWantTick(t);
   teaTick(t);
   queueTick(t);
   dialogTick(t);
@@ -2253,7 +2264,7 @@ function panel(t) {
     { key: 'season', txt: `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[season] },
     { key: 'weather', txt: `Погода: ${WEATHER_UA[weather]}${weatherPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[weather] },
     { key: 'sound', txt: soundOn ? `Звук: увімк · ${Math.round(volume * 100)}%` : 'Звук: вимк', ic: soundOn ? ICON5.soundOn : ICON5.soundOff },
-    { key: 'bus', txt: bus ? 'Бусифікація…' : busTarget()?.kind === 'chatgpt' ? 'Бусифікувати GPT' : 'Бусифікувати', ic: ICON5.bus, half: true, short: bus ? 'Бусифікація…' : 'Бусифікувати' },
+    { key: 'bus', txt: bus || busWant ? 'Бусифікація…' : busTarget()?.kind === 'chatgpt' ? 'Бусифікувати GPT' : 'Бусифікувати', ic: ICON5.bus, half: true, short: bus || busWant ? 'Бусифікація…' : 'Бусифікувати' },
     { key: 'demo', txt: 'Демо', ic: demoOn ? ICON5.demoOn : ICON5.demoOff, half: true, compact: true },
   ];
   ctx.textBaseline = 'middle';
