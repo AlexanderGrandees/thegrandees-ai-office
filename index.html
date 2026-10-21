@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v5.3';                     // показывается в панели справа; поднимать при каждом выпуске
+const APP_VERSION = 'v5.4';                     // показывается в панели справа; поднимать при каждом выпуске
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -1657,6 +1657,8 @@ function busStep(dt, t) {
     if (bus.forced && a.x > 280 && a.y >= 173 && !a.held) { a.held = true; a.path = []; a.pending = null; a.dir = 'left'; }   // по кнопці чекає на тротуарі, поки ряд звільниться
     // агент вышел из двери и идёт к лавочке, ближний ряд свободен: бус выезжает
     if (t - bus.at > 25) { bus = null; return; }
+    // по кнопці, а агент уже сидить на лавочці: встає і виходить на тротуар, бус їде одразу
+    if (bus.forced && !a.held && !a.path.length && a.place.out) a.path = [{ x: a.x, y: 174 }];
     if (a.y > 150 && (a.path.length || a.held || (bus.exit && atCurb(a))) && laneFree(-90, 260)) {
       bus.van = { bus: true, x: -40, y: 192, ang: 0, v: 150, dir: 1, len: VAN_LEN };
       cars.push(bus.van); bus.state = 'come';
