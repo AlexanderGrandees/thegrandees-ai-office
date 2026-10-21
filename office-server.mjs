@@ -171,11 +171,15 @@ async function checkUpdate() {
     if (!latest) return updLog('не смог узнать новую версию');
     if (latest === mine) return;
     updLog(`новая версия ${latest} (была ${mine}): запускаю установщик`);
-    const [cmd, args] = process.platform === 'win32'
-      ? ['powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', `$env:TGTI_UPDATE='1'; irm https://raw.githubusercontent.com/${REPO}/main/windows/install.ps1 | iex`]]
-      : ['/bin/bash', ['-c', `TGTI_UPDATE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/${REPO}/main/macos/install.sh)"`]];
-    const out = fs.openSync(path.join(path.dirname(VERSION_FILE), 'update.log'), 'a');
-    spawn(cmd, args, { detached: true, stdio: ['ignore', out, out], windowsHide: true }).unref();
+    const log = path.join(path.dirname(VERSION_FILE), 'update.log');
+    if (process.platform === 'win32') {
+      // установщик сам остановит этот сервер, поэтому PowerShell запускается отдельно и пишет всё в update.log
+      const ps = `$ErrorActionPreference='Continue'; $env:TGTI_UPDATE='1'; try { $s = Invoke-RestMethod -UseBasicParsing 'https://raw.githubusercontent.com/${REPO}/main/windows/install.ps1'; & ([scriptblock]::Create($s)) *>&1 | Out-File -Append -Encoding utf8 -FilePath '${log.replace(/'/g, "''")}' } catch { $_ | Out-File -Append -Encoding utf8 -FilePath '${log.replace(/'/g, "''")}' }`;
+      spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-NonInteractive', '-Command', ps], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    } else {
+      const out = fs.openSync(log, 'a');
+      spawn('/bin/bash', ['-c', `curl -fsSL https://raw.githubusercontent.com/${REPO}/main/macos/install.sh | TGTI_UPDATE=1 bash`], { detached: true, stdio: ['ignore', out, out] }).unref();
+    }
   } catch (e) { if (VERSION_FILE) updLog(`ошибка: ${e.message}`); }   // нет сети: попробуем позже
 }
 if (VERSION_FILE) { setTimeout(checkUpdate, 60e3); setInterval(checkUpdate, 12 * 3600e3); }
