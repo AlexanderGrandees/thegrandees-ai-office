@@ -10,7 +10,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.OFFICE_PORT || 7777);
@@ -145,6 +145,35 @@ if (process.env.OFFICE_WITH_PARENT === '1') {
   process.stdin.on('close', () => process.exit(0));
   process.stdin.resume();
 }
+
+// ---------- автообновление ----------
+// Установленный офис (OFFICE_VERSION_FILE задаёт установщик) раз в 12 часов сверяет свою версию с GitHub.
+// Если вышла новая, тихо запускает тот же установщик: он обновит файлы и перезапустит сервер.
+const REPO = 'AlexanderGrandees/thegrandees-ai-office';
+const VERSION_FILE = process.env.OFFICE_VERSION_FILE;
+async function latestVersion() {
+  const headers = { 'user-agent': 'tgti-ai-office', accept: 'application/vnd.github+json' };
+  if (process.platform === 'darwin') {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/mac-latest`, { headers });
+    return r.ok ? (await r.json()).assets?.find(a => a.name.endsWith('.zip'))?.updated_at : null;
+  }
+  const r = await fetch(`https://api.github.com/repos/${REPO}/commits/main`, { headers });
+  return r.ok ? (await r.json()).sha : null;
+}
+async function checkUpdate() {
+  try {
+    const mine = fs.readFileSync(VERSION_FILE, 'utf8').replace(/^\uFEFF/, '').trim();
+    if (!mine || mine === 'local') return;                     // ручная или тестовая установка: не трогаем
+    const latest = await latestVersion();
+    if (!latest || latest === mine) return;
+    console.log(`Новая версия ${latest}: обновляюсь.`);
+    const [cmd, args] = process.platform === 'win32'
+      ? ['powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', `$env:TGTI_UPDATE='1'; irm https://raw.githubusercontent.com/${REPO}/main/windows/install.ps1 | iex`]]
+      : ['/bin/bash', ['-c', `TGTI_UPDATE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/${REPO}/main/macos/install.sh)"`]];
+    spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  } catch { /* нет сети или файла версии: попробуем позже */ }
+}
+if (VERSION_FILE) { setTimeout(checkUpdate, 60e3); setInterval(checkUpdate, 12 * 3600e3); }
 
 // ---------- сессии из хуков ----------
 const sessions = new Map();

@@ -28,8 +28,7 @@ function readJson(file) {
 function install(file, events, makeGroup) {
   const settings = readJson(file);
   if (!settings) return false;
-  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak-${Date.now()}`);
-  else fs.mkdirSync(path.dirname(file), { recursive: true });
+  const before = JSON.stringify(settings);
   settings.hooks ??= {};
   for (const ev of events) {
     const groups = (settings.hooks[ev] ?? [])
@@ -39,6 +38,9 @@ function install(file, events, makeGroup) {
     if (groups.length) settings.hooks[ev] = groups; else delete settings.hooks[ev];
   }
   if (!Object.keys(settings.hooks).length) delete settings.hooks;
+  if (JSON.stringify(settings) === before) { console.log(`Хуки в ${file} уже на месте`); return true; }
+  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak-${Date.now()}`);
+  else fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   console.log(`${remove ? 'Убрал хуки из' : 'Записал хуки в'} ${file}`);
   return true;

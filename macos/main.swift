@@ -65,6 +65,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSMenuDe
         p.currentDirectoryURL = resDir
         var env = ProcessInfo.processInfo.environment
         env["OFFICE_WITH_PARENT"] = "1"      // the server exits as soon as this app is gone (stdin closes)
+        env["OFFICE_VERSION_FILE"] = supportDir.appendingPathComponent("version").path   // automatic updates
         p.environment = env
         let pin = Pipe()
         p.standardInput = pin

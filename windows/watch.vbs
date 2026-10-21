@@ -16,5 +16,6 @@ If fs.FileExists(dir & "\node-path.txt") Then
   f.Close
 End If
 sh.Environment("PROCESS")("OFFICE_WITH_WE") = "1"
+sh.Environment("PROCESS")("OFFICE_VERSION_FILE") = dir & "\version.txt"
 sh.CurrentDirectory = dir
 sh.Run """" & node & """ """ & dir & "\office-server.mjs""", 0, False

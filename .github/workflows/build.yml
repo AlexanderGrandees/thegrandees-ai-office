@@ -122,6 +122,24 @@ jobs:
           Write-Host "::notice title=windows::server stopped $($i * 5) s after Wallpaper Engine closed"
           Stop-Process -Id $cl.Id -Force
           Stop-Transcript | Out-Null
+      - name: Automatic update to the newest version
+        if: github.ref == 'refs/heads/main'
+        shell: powershell
+        run: |
+          Start-Transcript -Path "$env:RUNNER_TEMP\log.txt" -Append | Out-Null
+          $App = "$env:LOCALAPPDATA\TGTI-AI-Office"
+          Set-Content "$App\version.txt" 'old' -Encoding Ascii
+          $we = Start-Process "$env:TEMP\wallpaper64.exe" -ArgumentList '-n 600 127.0.0.1' -WindowStyle Hidden -PassThru
+          Start-ScheduledTask -TaskName 'TGTI AI Office'
+          $v = ''
+          for ($i = 0; $i -lt 60 -and $v -ne $env:GITHUB_SHA; $i++) { Start-Sleep 5; $v = (Get-Content "$App\version.txt" -ErrorAction SilentlyContinue | Select-Object -First 1) }
+          if ($v -ne $env:GITHUB_SHA) { throw "not updated: version.txt = $v" }
+          $s = $null
+          for ($j = 0; $j -lt 40 -and -not $s; $j++) { Start-Sleep 3; try { $s = Invoke-RestMethod http://127.0.0.1:7777/state } catch {} }
+          if (-not $s) { throw 'server did not come back after the update' }
+          Write-Host "::notice title=windows update::updated itself to $v after $($i * 5) s, server is back"
+          Stop-Process -Id $we.Id -Force
+          Stop-Transcript | Out-Null
       - name: Uninstall
         shell: powershell
         run: |
@@ -138,7 +156,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git archive --format zip --prefix TGTI-AI-Office/ -o TGTI-AI-Office-windows.zip HEAD
+          echo "$GITHUB_SHA" > VERSION
+          git archive --format zip --prefix TGTI-AI-Office/ --add-file=VERSION -o TGTI-AI-Office-windows.zip HEAD
           gh release view windows-latest >/dev/null 2>&1 || gh release create windows-latest --title "Windows" --notes "Install: open PowerShell and run  irm https://raw.githubusercontent.com/${{ github.repository }}/main/windows/install.ps1 | iex   (or unzip TGTI-AI-Office-windows.zip and double-click install-windows.cmd)"
           gh release upload windows-latest TGTI-AI-Office-windows.zip --clobber
       - name: Show the log on failure

@@ -71,6 +71,12 @@ else {
 }
 Set-Content -Path "$App\node-path.txt" -Value $node -Encoding Unicode
 
+# version for the automatic updates (the server checks GitHub twice a day and reruns this installer quietly)
+$ver = 'local'
+if (-not $env:TGTI_SOURCE) { try { $ver = (Invoke-RestMethod -Headers @{ 'User-Agent' = 'tgti-ai-office' } "https://api.github.com/repos/$Repo/commits/main").sha } catch { } }
+elseif (Test-Path (Join-Path $src 'VERSION')) { $ver = (Get-Content (Join-Path $src 'VERSION') | Select-Object -First 1).Trim() }
+Set-Content -Path "$App\version.txt" -Value $ver -Encoding Ascii
+
 # 3. hooks
 Step 'Adding hooks for Claude Code and Codex'
 Push-Location $App
