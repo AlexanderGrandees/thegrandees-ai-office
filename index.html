@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v5.0';                     // показывается в панели справа; поднимать при каждом выпуске
+const APP_VERSION = 'v5.1';                     // показывается в панели справа; поднимать при каждом выпуске
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -238,13 +238,18 @@ const CAFE = [CHILL[2], CHILL[7]];                    // два табурета
 // место у бордюра, где агент выходит из такси или ждёт его
 const curbPlace = () => ({ lane: 142, entry: [{ x: 192, y: 142 }, { x: 192, y: 152 }, { x: 192, y: 166 }, { x: 192, y: 179 }], face: 'down', street: true });
 const spotOf = p => p.entry[p.entry.length - 1];
+// брифинг: ведущий стоит лицом к команде в проходе под вторым рядом столов
+const BRIEF_SPOTS = [[210, 124, 'down'], [184, 137, 'up'], [236, 137, 'up'], [158, 133, 'right'], [262, 133, 'left']]
+  .map(([x, y, face]) => ({ lane: 142, entry: [{ x, y: 142 }, { x, y }], face, sit: false, act: 'brief', owner: null }));
+// в какой части офиса агент: болтают только те, кто в одной зоне
+const zoneOf = a => { const p = a.place; if (p.street || p.out) return 'street'; const x = spotOf(p).x; return x < V ? 'lounge' : x < 268 ? 'desks' : 'kitchen'; };
 // лавочка справа на улице: туда выходит отдохнуть агент, которому нечего делать
 const BENCH = { lane: 142, entry: [{ x: 192, y: 142 }, { x: 192, y: 152 }, { x: 192, y: 166 }, { x: 192, y: 174 }, { x: 366, y: 174 }, { x: 366, y: 166 }], face: 'down', sit: true, act: 'bench', out: true, owner: null };
 const WINDOWS = [198, 230];
 const inWindow = (x, y) => y >= 26.5 && y < 41.5 && WINDOWS.some(wx => x >= wx + 0.5 && x < wx + 25.5);
 const inBuilding = (x, y) => x >= 71 && x < 313 && y >= 19 && y < 165;
 const inSign = (x, y) => x >= 145 && x < 239 && y >= 0 && y < 20;
-const LAMPS = [40, 140, 250, 344];
+const LAMPS = [12, 66, 320, 349];   // только во дворах по бокам: столбы не должны залезать на стену здания
 const TREES = [[26, 26, 12], [54, 58, 9], [22, 104, 13], [50, 140, 8], [356, 28, 12], [334, 72, 9], [362, 118, 12], [336, 150, 8], [104, 8, 6], [280, 8, 7]];
 const PUDDLES = [[30, 177, 6], [118, 179, 4], [302, 175, 7], [88, 196, 9], [214, 206, 10], [334, 192, 7], [262, 178, 4]];
 const SPOTS = [336, 368, 400, 432];                  // точечные лампы под вывеской (мелкие пиксели)
@@ -758,7 +763,7 @@ function newAgent(s) {
   const t = performance.now() / 1000;
   const a = { id: s.id, kind: KIND[s.kind] ? s.kind : 'claude', name: s.name, status: s.status, tool: s.tool || '', tagNo: 1,
     place: curbPlace(), x: 192, y: 179, path: [], pending: null, desk: null, spot: null, leaving: false, arriving: true, brk: null,
-    nextBreak: t + (FAST ? 8 : rand(90, 240)), nextOut: t + (HASH.includes('bus') ? 4 : outGap()), nextSay: t + rand(4, 10), say: null, greeted: false,
+    nextBreak: t + (FAST ? 8 : rand(90, 240)), nextYt: t + (FAST ? rand(6, 14) : rand(120, 420)), nextOut: t + (HASH.includes('bus') ? 4 : outGap()), nextSay: t + rand(4, 10), say: null, greeted: false,
     dir: 'down', ph: Math.random() * 6, idleSince: s.status === 'idle' ? t : null };
   agents.set(s.id, a);
   return a;
@@ -776,7 +781,7 @@ function wanted(a, t) {
   if (a.leaving) return a.leavePlace;
   if (!a.desk) { a.desk = DESKS.find(d => !d.owner) || null; if (a.desk) a.desk.owner = a; }
   if (a.brk) return a.brk.spot;
-  const rest = a.status === 'idle' && a.idleSince !== null && t - a.idleSince > IDLE_TO_CHILL;
+  const rest = a.status === 'idle' && a.idleSince !== null && t - a.idleSince > IDLE_TO_CHILL && !(a.yt && a.place === a.desk);
   if (!rest && a.desk) { if (a.spot) { a.spot.owner = null; a.spot = null; } return a.desk; }
   if (!a.spot) { a.spot = CHILL.find(s => !s.owner) || null; if (a.spot) a.spot.owner = a; }
   return a.spot || a.desk || a.place;
@@ -795,6 +800,12 @@ function leave(a) {
   if (a.spot) { a.spot.owner = null; a.spot = null; }
   say(a, pick([...LINES.bye, ...LINES.byeRide[rideOf(a)]]), performance.now() / 1000, true);
   catGreet(a, true);
+  maybeBus(a, performance.now() / 1000);
+}
+// кожен вихід на вулицю будь-якої моделі може закінчитись бусом (після паузи між бусами)
+function maybeBus(a, t) {
+  if (bus || brief?.team.includes(a)) return;
+  if (HASH.includes('bus') || (t > busNext && Math.random() < (FAST ? 1 : 0.5))) bus = { a, state: 'armed', at: t, exit: a.leaving };
 }
 const free = a => !a.leaving && !a.arriving && !a.away && !a.held && !a.brk && arrived(a);
 const resting = (a, t) => free(a) && a.status === 'idle' && a.idleSince !== null && t - a.idleSince > IDLE_TO_CHILL && a.spot && a.place === a.spot;
@@ -837,11 +848,12 @@ function goOut(a, t) {
   if (cafeWith(a, t)) return;
   if (BENCH.owner) return;
   BENCH.owner = a; a.brk = { spot: BENCH, until: 0 };
-  if (!bus && (HASH.includes('bus') || (t > busNext && Math.random() < (FAST ? 1 : 0.35)))) bus = { a, state: 'armed', at: t };
+  maybeBus(a, t);
 }
 // иногда агент встаёт из-за стола и идёт за кофе или чаем
 function breakTick(a, t) {
   if (a.leaving || a.arriving || a.away || a.held) return;
+  if (a.brk?.brief) { if (a.status === 'waiting') endBreak(a, t); return; }
   if (a.brk) {
     const there = arrived(a) && a.place === a.brk.spot, sp = a.brk.spot;
     if (there && !a.brk.until) {
@@ -889,6 +901,7 @@ function step(dt, t) {
     if (a.arriving) continue;                          // ещё едет в машине
     if (a.held) { chatTick(a, t); continue; }          // стоит, его проверяют
     breakTick(a, t);
+    ytTick(a, t);
     if (!a.path.length) {
       const want = a.pending || wanted(a, t);
       if (want !== a.place) routeTo(a, want);
@@ -902,6 +915,7 @@ function step(dt, t) {
     if (!a.greeted && arrived(a) && a.place === a.desk) { a.greeted = true; say(a, pick(phase === 'night' ? LINES.helloNight : LINES.hello), t, false); }
     chatTick(a, t);
   }
+  briefTick(t);
   dialogTick(t);
 }
 const arrived = a => !a.path.length && !a.pending;
@@ -914,14 +928,15 @@ function activity(a, t) {
   if (atCurb(a)) return 'cab';
   if (a.leaving || !arrived(a)) return 'walk';
   if (a.brk) return a.brk.cafe ? 'cafe' : a.brk.spot.act;
-  if (a.place.desk) return a.status === 'working' ? 'work' : a.status === 'waiting' ? 'wait' : 'desk';
+  if (a.place.desk) return a.status === 'working' ? 'work' : a.status === 'waiting' ? 'wait' : a.yt ? 'youtube' : 'desk';
   if (a.status === 'waiting') return 'wait';
+  if (a.yt && a.place.act === 'tv') return 'youtube';
   if (a.place.act === 'tv' && a.idleSince !== null && t - a.idleSince > IDLE_TO_SLEEP) return 'sleep';
   return a.place.act || 'desk';
 }
 const ACT_UA = { work: 'працює', wait: 'чекає на тебе', desk: 'на місці', walk: 'йде', coffee: "п'є каву", tea: "п'є чай",
   tv: 'дивиться графіки', music: 'слухає музику', game: 'грає в аркаду', phone: 'в телефоні', sleep: 'дрімає',
-  ride: 'їде', cab: 'чекає машину', bench: 'на лавочці', cafe: 'п\'є каву за столиком', army: 'на службі', check: 'перевіряють документи' };
+  ride: 'їде', cab: 'чекає машину', brief: 'на брифінгу', youtube: 'дивиться YouTube', bench: 'на лавочці', cafe: 'п\'є каву за столиком', army: 'на службі', check: 'перевіряють документи' };
 const RIDE_UA = { taxi: ['їде на таксі', 'чекає таксі'], tesla: ['їде на Теслі', 'сідає в Теслу'], limo: ['їде на лімузині', 'чекає лімузин'] };
 // що агент робить зараз: інструмент і коротка підпис від хуків (ім'я файлу, команда, сайт, 6 символів запиту)
 const TOOL_UA = {
@@ -958,6 +973,9 @@ const LINES = {
   coffee: ['Кава!', 'Перерва на каву', 'Ще одну каву'], tea: ['Час на чай', 'Чай з лимоном', 'Гарячий чай'],
   tv: ['Графік росте', 'Дивлюсь ринок'], game: ['Ще рівень!', 'Рекорд!', 'Майже пройшов'], music: ['Гарна пісня', 'Відпочиваю'],
   phone: ['Гортаю новини'], sleep: ['Хррр…'], desk: ['Чекаю задачу', 'Що далі?'],
+  youtube: ['Ха-ха, класний ролик', 'Ще одне відео…', 'О, котики!', 'Цей блогер топ'],
+  ytStart: ['Гляну одне відео…', 'Тільки один ролик', 'Хвилинка ютубу'],
+  ytDone: ['Опа, додивився ютуб! Робимо вигляд, що працюємо, хлопці'],
   catDesk: ['Мурчику, привіт!', 'Котик!', 'Не лягай на клаву', 'Хто тут прийшов?'], catSofa: ['Гарний котик', 'Мурчить…'], catBeg: ['Це не тобі', 'Кава не для котів', 'Ну добре, трошки'],
   flash: ['Ого, блискавка!', 'Гримить…', 'Ух!'],
   sky: {
@@ -1012,40 +1030,112 @@ const WORK_DIALOGS = [
   { when: (x, y) => y.tool === 'думает' && y.detail, lines: (x, y) => [`${voc(y)}, про що думаєш?`, `Про «${y.detail}»`] },
   { when: (x, y) => busy(x) && busy(y), lines: ['Ти теж у роботі?', 'По вуха в коді'] },
 ];
-let talk = null, nextTalk = FAST ? 14 : 60;
+const EARLY = 1200;                                  // перші 20 хвилин після запуску розмов більше, щоб офіс одразу ожив
+let talk = null, nextTalk = FAST ? 14 : 20;
 function dialogTick(t) {
-  const ok = a => a && agents.has(a.id) && !a.arriving && !a.leaving && !a.away && !a.held && !a.brk?.cafe && arrived(a);
+  const ok = a => a && agents.has(a.id) && !a.arriving && !a.leaving && !a.away && !a.held && !a.brk?.cafe && !a.brk?.brief && arrived(a);
   if (talk) {
-    if (!talk.who.every(ok)) { talk = null; nextTalk = t + 20; return; }
+    // хтось пішов або пересів в іншу частину офісу: розмова обривається, їхні репліки зникають
+    if (!talk.who.every(ok) || zoneOf(talk.who[0]) !== zoneOf(talk.who[1])) {
+      for (const a of talk.who) if (a.say?.talk && !a.leaving) a.say = null;
+      talk = null; nextTalk = t + 20; return;
+    }
     if (t < talk.next) return;
     const sp = talk.who[talk.i % 2];
-    say(sp, talk.lines[talk.i], t, true); sp.nextSay = t + 12;
-    if (++talk.i >= talk.lines.length) { talk = null; nextTalk = t + (FAST ? rand(15, 25) : rand(90, 220)); }
+    say(sp, talk.lines[talk.i], t, true); sp.say.talk = true; sp.nextSay = t + 12;
+    if (++talk.i >= talk.lines.length) { talk = null; nextTalk = t + (FAST ? rand(15, 25) : t < EARLY ? rand(20, 45) : rand(90, 220)); }
     else talk.next = t + 2.9;
     return;
   }
   if (t < nextTalk) return;
   nextTalk = t + 10;
   const here = [...agents.values()].filter(ok);
-  if (here.length < 2) return;
+  const pairs = [];
+  for (const x of here) for (const y of here) if (x !== y && zoneOf(x) === zoneOf(y)) pairs.push([x, y]);
+  if (!pairs.length) return;
   const fits = [], work = [];
-  for (const d of WORK_DIALOGS) for (const x of here) for (const y of here) {
-    if (x === y || (d.a && GROUP[x.kind] !== d.a) || (d.b && GROUP[y.kind] !== d.b) || !d.when(x, y)) continue;
+  for (const d of WORK_DIALOGS) for (const [x, y] of pairs) {
+    if ((d.a && GROUP[x.kind] !== d.a) || (d.b && GROUP[y.kind] !== d.b) || !d.when(x, y)) continue;
     work.push({ who: [x, y], lines: typeof d.lines === 'function' ? d.lines(x, y) : d.lines });
   }
   if (work.length && Math.random() < 0.6) { const f = pick(work); talk = { who: f.who, lines: f.lines, i: 0, next: t }; return; }
   for (const d of DIALOGS) {
-    if (!d.a) { const [x, y] = [...here].sort(() => Math.random() - 0.5); fits.push({ d, who: [x, y] }); continue; }
-    const xs = here.filter(a => GROUP[a.kind] === d.a), ys = here.filter(a => GROUP[a.kind] === d.b);
-    if (xs.length && ys.length) fits.push({ d, who: [pick(xs), pick(ys)] }, { d, who: [pick(xs), pick(ys)] });   // адресні частіше
+    if (!d.a) { fits.push({ d, who: pick(pairs) }); continue; }
+    const m = pairs.filter(([x, y]) => GROUP[x.kind] === d.a && GROUP[y.kind] === d.b);
+    if (m.length) fits.push({ d, who: pick(m) }, { d, who: pick(m) });   // адресні частіше
   }
   const f = pick(fits);
   talk = { who: f.who, lines: f.d.lines, i: 0, next: t };
+}
+
+// брифінг раз на 15 хвилин: усі, хто в офісі, збираються в проході, ведучий питає кожного, що в нього
+let brief = null, briefNext = HASH.includes('brief') ? 6 : FAST ? 40 : 900;
+const BRIEF_LEAD = ['claude', 'codex', 'gpt'];
+function briefTick(t) {
+  if (!brief) {
+    if (t < briefNext) return;
+    if (bus) { briefNext = t + 30; return; }
+    const team = [...agents.values()].filter(a => !a.leaving && !a.arriving && !a.away && !a.held && a.status !== 'waiting' && !a.brk?.forced);
+    if (team.length < 2) { briefNext = t + 60; return; }
+    const lead = BRIEF_LEAD.map(gr => team.find(a => GROUP[a.kind] === gr)).find(Boolean) || team[0];
+    const crew = [lead, ...team.filter(a => a !== lead)].slice(0, BRIEF_SPOTS.length);
+    if (talk && talk.who.some(a => crew.includes(a))) talk = null;
+    crew.forEach((a, i) => {
+      if (a.brk) endBreak(a, t);
+      a.yt = null;
+      const spot = BRIEF_SPOTS[i]; spot.owner = a; a.brk = { spot, until: 0, brief: true };
+    });
+        brief = { at: t, lead, team: crew, state: 'gather', i: 0, next: 0, lines: [] };
+    say(lead, pick(['Збираємось на брифінг!', 'Брифінг, усі сюди!', 'Команда, на брифінг!']), t, true);
+    return;
+  }
+  brief.team = brief.team.filter(a => agents.has(a.id) && a.brk?.brief);
+  if (!brief.team.includes(brief.lead) || brief.team.length < 2) { endBrief(t); return; }
+  if (brief.state === 'gather') {
+    if (!brief.team.every(a => arrived(a) && a.place === a.brk.spot) && t - brief.at < 45) return;
+    const L = brief.lead, lines = [[L, pick(['Отже, коротко по задачах', 'Стендап! По черзі, коротко', 'Що в кого? Коротко'])]];
+    for (const a of brief.team.filter(a => a !== L).slice(0, 3)) {
+      lines.push([L, `${voc(a)}${a.tagNo > 1 ? ' ' + a.tagNo : ''}, що в тебе?`]);
+      lines.push([a, a.status === 'working' ? doing(a, true) || pick(['Працюю над задачею', 'В процесі, все йде']) : pick(['Чекаю нову задачу', 'Вільний, беру будь-що', 'Все здав, чекаю'])]);
+    }
+    lines.push([L, pick(['Все, по місцях!', 'Дякую, працюємо!', 'Супер, розходимось'])]);
+    Object.assign(brief, { state: 'talk', lines, next: t + 0.6 });
+    return;
+  }
+  if (t < brief.next) return;
+  if (brief.i >= brief.lines.length) { endBrief(t); return; }
+  const [who, text] = brief.lines[brief.i++];
+  if (brief.team.includes(who)) { say(who, text, t, true); who.nextSay = t + 10; }
+  brief.next = t + 2.9;
+}
+function endBrief(t) {
+  for (const a of brief.team) if (a.brk?.brief) endBreak(a, t);
+  for (const s of BRIEF_SPOTS) if (s.owner && !s.owner.brk?.brief) s.owner = null;
+  brief = null; briefNext = t + (FAST ? 60 : 900);
+}
+
+// ютуб: агент без задачі за столом або на дивані дивиться ролики, а потім робить вигляд, що працює
+function ytTick(a, t) {
+  if (a.leaving || a.arriving || a.away || a.held) { a.yt = null; return; }
+  const placeOk = arrived(a) && !a.brk && (a.place === a.desk || a.place.act === 'tv');
+  if (a.yt) {
+    const called = a.status !== 'idle';                // прийшла справжня задача
+    if (!placeOk || called || t > a.yt.until) {
+      if (placeOk) say(a, pick(LINES.ytDone), t, true);
+      a.yt = null; a.nextYt = t + (FAST ? rand(20, 30) : rand(300, 900));
+    }
+    return;
+  }
+  if (t < a.nextYt) return;
+  if (!placeOk || a.status !== 'idle' || brief) { a.nextYt = t + 20; return; }
+  a.yt = { until: t + (FAST ? rand(8, 12) : rand(45, 120)) };
+  say(a, pick(LINES.ytStart), t, true);
 }
 function chatTick(a, t) {
   if (a.say && a.say.until < t) a.say = null;
   if (a.held || a.say || t < a.nextSay || a.leaving || !arrived(a)) return;
   const act = activity(a, t);
+  if (act === 'brief') return;                         // на брифінгу говорять по черзі
   if (act === 'cafe') {                                // за столиком болтают по очереди
     const p = a.brk.cafe;
     if (p.say && p.say.until > t - 1) return;
@@ -1099,6 +1189,12 @@ function drawBot(a, t) {
       const st = (t * 3 | 0) % 2; q(cx + 1 + st, cy - 2, 'rgba(255,255,255,0.7)'); q(cx + 2 - st, cy - 4, 'rgba(255,255,255,0.45)');
     }
   }
+  if (a.gen && !a.doc) {                                // генерує документ: аркуш збирається з мерехтливих пікселів
+    const right = dir !== 'left', dx = right ? X + 9 : X - 15, p = Math.min(1, (t - a.gen) / 3);
+    Q(dx, T + 13, 6, 8, '#1b2a5c');
+    for (let i = 0; i < 24; i++) if (i / 24 < p) Q(dx + 1 + (i % 4), T + 14 + (i / 4 | 0), 1, 1, ((t * 10 | 0) + i) % 5 ? '#2d4a9a' : '#ffcf5c');
+    for (let i = 0; i < 3; i++) { const k = (t * 2 + i / 3) % 1; q(dx + 3 + Math.round(Math.sin((t + i) * 5) * 5), T + 12 - Math.round(k * 8), `rgba(185,168,255,${(1 - k).toFixed(2)})`); }
+  }
   if (a.doc) {                                          // показывает документы
     const right = dir !== 'left', dx = right ? X + 9 : X - 15;
     Q(dx, T + 13, 6, 8, '#1b2a5c'); Q(dx + 1, T + 14, 4, 6, '#2d4a9a'); Q(dx + 2, T + 15, 2, 2, '#ffcf5c'); Q(dx + 1, T + 18, 4, 1, '#c9c3e6');
@@ -1120,9 +1216,10 @@ const ICON = {
   chart:  ['......#', '.....#.', '.#.##..', '#.#....', '#######'],
   note:   ['...###.', '...#.#.', '...#.#.', '.###.#.', '.##.##.'],
   phone:  ['.###...', '.#.#...', '.###...', '.###...', '.###...'],
+  play:   ['#######', '##.####', '##..###', '##.####', '#######'],
   car:    ['.###...', '#####..', '#####..', '.#.#...', '.......'],
 };
-const ICON_COL = { term: '#1D1A33', pencil: '#cf6f47', lens: '#4A37C9', cup: '#8a5f3f', pad: '#ff5aa0', chart: '#137A4F', note: '#4A37C9', phone: '#1D1A33', car: '#c99a1a' };
+const ICON_COL = { term: '#1D1A33', pencil: '#cf6f47', lens: '#4A37C9', cup: '#8a5f3f', pad: '#ff5aa0', chart: '#137A4F', note: '#4A37C9', phone: '#1D1A33', car: '#c99a1a', play: '#e02424' };
 const TOOL_ICON = { Bash: 'term', Edit: 'pencil', MultiEdit: 'pencil', Write: 'pencil', NotebookEdit: 'pencil', Read: 'lens', Grep: 'lens', Glob: 'lens', WebSearch: 'lens', WebFetch: 'lens' };
 function chip(name, bx, by) {
   const X = Math.round(bx * S), Y = Math.round(by * S);
@@ -1165,6 +1262,7 @@ function drawLabel(a, t) {
   else if (act === 'tv') chip('chart', bx, by);
   else if (act === 'music') chip('note', bx, by - ((t * 2 | 0) % 2));
   else if (act === 'phone') chip('phone', bx, by);
+  else if (act === 'youtube') chip('play', bx, by);
   else if (act === 'cab') chip('car', bx, by - ((t * 2 | 0) % 2));
 }
 
@@ -1208,6 +1306,15 @@ function drawDesk(d, t) {
     if ((t * 2 | 0) % 2) Q(sx + 2, sy + sh - 1, 3, 1, '#f7f5ff');
   } else if (here && o.status === 'waiting') {
     Q(sx, sy, sw, sh, (t * 2 | 0) % 2 ? '#ffcf5c' : '#5c4a1f'); Q(sx + 12, sy + 2, 2, 6, '#1D1A33'); Q(sx + 12, sy + 10, 2, 2, '#1D1A33');
+  } else if (here && o.yt) {
+    // ютуб: чорний плеєр, кольоровий ролик і червона смужка прогресу
+    Q(sx, sy, sw, sh, '#0f0f0f');
+    const ph = t * 0.8 + d.cx, sky = ['#5cc8ff', '#ff9ab8', '#7fe0b4', '#ffcf5c'][(ph / 3 | 0) % 4];
+    Q(sx + 1, sy + 1, sw - 2, sh - 4, sky); Q(sx + 1, sy + 6, sw - 2, sh - 9, shade(sky, 0.7));
+    const bx = sx + 4 + ((t * 6) % (sw - 10)); Q(bx, sy + 4, 4, 4, '#f7f5ff'); Q(bx + 1, sy + 5, 2, 2, '#1D1A33');
+    Q(sx + 1, sy + 1, 5, 4, '#ff2a2a'); q(sx + 3, sy + 2, '#ffffff'); q(sx + 3, sy + 3, '#ffffff'); q(sx + 4, sy + 2, '#ffffff');
+    const prog = Math.max(0, Math.min(1, 1 - (o.yt.until - t) / 90));
+    Q(sx + 1, sy + sh - 2, sw - 2, 1, '#3a3a3a'); Q(sx + 1, sy + sh - 2, Math.max(1, Math.round((sw - 2) * prog)), 1, '#ff2a2a');
   } else if (here || (o && o.brk)) {
     // на месте или ушёл за кофе: на экране график
     Q(sx, sy, sw, sh, '#0e1630');
@@ -1325,7 +1432,7 @@ const pickRide = kind => kind === 'chatgpt' ? (Math.random() < 0.25 || HASH.incl
 const rideOf = a => a.ride || (a.ride = pickRide(a.kind));
 const rides = {};
 const laneFree = (x0, x1) => !cars.some(c => !c.bus && Math.abs(c.y - 192) < 5 && c.x > x0 && c.x < x1);
-const rideNeeded = type => [...agents.values()].some(a => rideOf(a) === type && (a.arriving || atCurb(a)));
+const rideNeeded = type => [...agents.values()].some(a => rideOf(a) === type && (a.arriving || (atCurb(a) && !a.held && bus?.a !== a)));
 function rideStep(type, dt, t) {
   let r = rides[type];
   if (!r) {
@@ -1348,7 +1455,7 @@ function rideStep(type, dt, t) {
           if (a.back) { a.back = false; say(a, pick(LINES.back), t, true); }
           catGreet(a);
         }
-      } else if (atCurb(a)) { agents.delete(a.id); r.busy = t; }
+      } else if (atCurb(a) && !a.held && bus?.a !== a) { agents.delete(a.id); r.busy = t; }
     }
     const door = s2 > 0.35 && t - (r.busy || r.at + 0.8) < 1.4;
     if (door !== !!r.door) sfx.door();
@@ -1444,7 +1551,7 @@ function drawCar(c, t) {
 // ---------- бус ТЦК: «бусифікація» по дороге на лавочку ----------
 // Бус залетает на тротуар с заносом, двое военных окружают агента, проверяют документы и забирают его.
 // Через несколько минут агент возвращается на своей машине, если его программа всё ещё открыта.
-let bus = null, busNext = FAST || HASH.includes('bus') ? 0 : 600;
+let bus = null, busNext = FAST || HASH.includes('bus') ? 0 : 120;
 const troops = [], skids = [];
 const SKID_LIFE = FAST ? 45 : 120;
 const vanC = document.createElement('canvas'); vanC.width = 80; vanC.height = 44;
@@ -1457,7 +1564,11 @@ function skid(v, t, k = 1) {
   v.lastW = w;
 }
 function trooper(x, y, path, role) { const o = { x, y, path, dir: 'left', ph: Math.random() * 6, say: null, hidden: false, doc: false, role }; troops.push(o); return o; }
-function troopSay(o, text, t) { o.say = { text, until: t + 4 }; sfx.blip('tck'); }
+// репліки сцени з бусом по черзі: нова прибирає попередню, щоб хмарки не лягали одна на одну
+function quiet() { if (bus?.a) bus.a.say = null; for (const o of troops) o.say = null; }
+function troopSay(o, text, t) { quiet(); o.say = { text, until: t + 4 }; sfx.blip('tck'); }
+function aSay(a, text, t) { quiet(); say(a, text, t, true); }
+let reserveSeen = false;                             // Клод уперше бачить бус: точно генерує резерв, далі в 30% випадків
 function moveAlong(o, dt, v) {
   if (!o.path.length) return true;
   const p = o.path[0], dx = p.x - o.x, dy = p.y - o.y, d = Math.hypot(dx, dy), s2 = v * dt;
@@ -1467,7 +1578,7 @@ function moveAlong(o, dt, v) {
   return !o.path.length;
 }
 function draft(a, t) {
-  a.held = false; a.doc = false; a.say = null; a.path = []; a.pending = null;
+  a.held = false; a.doc = false; a.gen = 0; a.say = null; a.path = []; a.pending = null;
   if (a.leaving) { agents.delete(a.id); return; }
   if (a.brk) { if (a.spot !== a.brk.spot) a.brk.spot.owner = null; a.brk = null; }
   if (a.spot) { a.spot.owner = null; a.spot = null; }
@@ -1479,18 +1590,21 @@ function busStep(dt, t) {
   const a = bus.a, here = a && agents.has(a.id), van = bus.van;
   const ease = p => 1 - (1 - p) * (1 - p);
   if (bus.state === 'armed') {
-    if (!here || a.leaving || !a.brk || a.brk.spot !== BENCH || (a.x > 290 && !bus.forced)) { bus = null; return; }
+    if (!here || (bus.exit ? !a.leaving : a.leaving || !a.brk || a.brk.spot !== BENCH || (a.x > 290 && !bus.forced))) { bus = null; return; }
     if (bus.forced && a.x > 280 && a.y >= 173 && !a.held) { a.held = true; a.path = []; a.pending = null; a.dir = 'left'; }   // по кнопці чекає на тротуарі, поки ряд звільниться
     // агент вышел из двери и идёт к лавочке, ближний ряд свободен: бус выезжает
-    if (a.y > 150 && (a.path.length || a.held) && laneFree(-90, 260)) {
+    if (t - bus.at > 25) { bus = null; return; }
+    if (a.y > 150 && (a.path.length || a.held || (bus.exit && atCurb(a))) && laneFree(-90, 260)) {
       bus.van = { bus: true, x: -40, y: 192, ang: 0, v: 150, dir: 1, len: VAN_LEN };
       cars.push(bus.van); bus.state = 'come';
+      if (GROUP[a.kind] === 'claude' && (!reserveSeen || Math.random() < 0.3)) { bus.reserve = true; reserveSeen = true; }
     }
     return;
   }
   if (bus.state === 'come') {
     van.x += van.v * dt;
-    if (!here || a.leaving || van.x > a.x + 6) { bus.state = 'go'; busNext = t + (FAST ? 30 : 600); if (here) { a.held = false; a.path = [{ x: 366, y: 174 }, { x: 366, y: 166 }]; } return; }
+    if (bus.reserve && !bus.r1 && van.x > 2 && here) { bus.r1 = 1; a.gen = t; aSay(a, 'Ой-ой! Генерую резерв з відстрочкою…', t); }
+    if (!here || (a.leaving && !bus.exit) || van.x > a.x + 6) { bus.state = 'go'; busNext = t + (FAST ? 30 : 120); if (here) a.gen = 0; if (here && !bus.exit) { a.held = false; a.path = [{ x: 366, y: 174 }, { x: 366, y: 166 }]; } return; }
     if (bus.forced && a.x > 280 && a.y >= 173 && !a.held) { a.held = true; a.path = []; a.pending = null; a.dir = 'left'; }
     if (a.y >= 173 && van.x >= a.x - 24) {
       bus.state = 'swerve'; bus.at = t; bus.sx = van.x; bus.tx = a.x + 32;
@@ -1533,20 +1647,20 @@ function busStep(dt, t) {
   const A = bus.A, B = bus.B;
   if (bus.state === 'talk') {
     if (!here) { bus.state = 'board'; bus.at = t; return; }
-    if (s2 > 2.6 && !bus.d1) { bus.d1 = 1; a.doc = true; say(a, pick(['Ось, будь ласка', 'Ось мої документи', 'Тримайте…']), t, true); }
+    if (s2 > 2.6 && !bus.d1) { bus.d1 = 1; a.doc = true; a.gen = 0; aSay(a, bus.reserve ? 'Ось, свіжий резерв з відстрочкою' : pick(['Ось, будь ласка', 'Ось мої документи', 'Тримайте…']), t); }
     if (s2 > 4.4 && !bus.d2) { bus.d2 = 1; a.doc = false; A.doc = true; }                          // військовий гортає документи
     // у Claude з документами все гаразд: його відпускають, і він іде на лавочку
     const legit = GROUP[a.kind] === 'claude';
-    if (s2 > 7.2 && !bus.d3) { bus.d3 = 1; A.doc = false; troopSay(A, legit ? 'Ви вільні' : 'Бусифікуємо!', t); }
+    if (s2 > 7.2 && !bus.d3) { bus.d3 = 1; A.doc = false; troopSay(A, bus.reserve ? 'Відстрочка є. Все добре, ви вільні' : legit ? 'Ви вільні' : 'Бусифікуємо!', t); }
     if (legit && s2 > 9.6) {
-      say(a, pick(['Дякую, гарного дня!', 'Дякую!', 'Слава Україні!']), t, true);
+      aSay(a, pick(['Дякую, гарного дня!', 'Дякую!', 'Слава Україні!']), t);
       const d = bus.door = local(van, 1, -7);
       A.path = [{ x: d.x, y: 174.5 }, d]; B.path = [{ x: d.x - 2, y: 174.5 }, d];
       bus.state = 'board'; bus.at = t; bus.thrown = t; bus.free = true;
       a.dir = 'right';                                   // стоїть, поки бус не поїде, потім іде на лавочку
       return;
     }
-    if (s2 > 11.4 && !bus.d4) { bus.d4 = 1; say(a, pick(['Але ж я просто ШІ…', 'Я ж бот!', 'А як же мій код?']), t, true); }
+    if (s2 > 11.4 && !bus.d4) { bus.d4 = 1; aSay(a, pick(['Але ж я просто ШІ…', 'Я ж бот!', 'А як же мій код?']), t); }
     if (s2 > 14.2) {
       // військові підходять впритул і хапають агента під руки
       bus.door = local(van, 1, -7); bus.state = 'board'; bus.at = t;
@@ -1559,7 +1673,7 @@ function busStep(dt, t) {
     if (!bus.thrown) {
       const inA = moveAlong(A, dt, 26), inB = moveAlong(B, dt, 26);
       if (!here) { bus.thrown = t; }
-      else if (inA && inB && !bus.grab) { bus.grab = t; bus.x0 = a.x; bus.y0 = a.y; A.dir = 'left'; B.dir = 'right'; say(a, pick(['Пустіть!', 'А-а-а!', 'Ой-ой-ой!']), t, true); }
+      else if (inA && inB && !bus.grab) { bus.grab = t; bus.x0 = a.x; bus.y0 = a.y; A.dir = 'left'; B.dir = 'right'; aSay(a, pick(['Пустіть!', 'А-а-а!', 'Ой-ой-ой!']), t); }
       if (bus.grab) {
         // закидають у бус: агент летить дугою, перекидаючись, у бічні двері
         const p = Math.max(0, Math.min(1, (t - bus.grab - 0.7) / 0.75));
@@ -1587,8 +1701,8 @@ function busStep(dt, t) {
     van.ang += (0.12 - van.ang) * Math.min(1, dt * 3);
     van.reverse = true;
     if (p >= 1 && laneFree(van.x - 80, W + 60)) {
-      if (bus.free && agents.has(a.id)) { a.held = false; a.pending = null; a.path = [{ x: 366, y: 174 }, { x: 366, y: 166 }]; }
-      bus.state = 'go'; bus.at = t; van.reverse = false; van.v = 20; van.lastW = null; busNext = t + (FAST ? 40 : rand(1500, 3000)); sfx.rev(); }
+      if (bus.free && agents.has(a.id)) { a.held = false; a.pending = null; a.path = bus.exit ? [] : [{ x: 366, y: 174 }, { x: 366, y: 166 }]; }   // хто йшов додому, лишається чекати машину
+      bus.state = 'go'; bus.at = t; van.reverse = false; van.v = 20; van.lastW = null; busNext = t + (FAST ? 40 : rand(180, 360)); sfx.rev(); }
     return;
   }
   // уезжает: быстрее всех, с визгом шин в начале
@@ -1906,13 +2020,21 @@ function frame(t, dt) {
   lineQ(524, 64, 524 + Math.cos(mm) * 7, 64 + Math.sin(mm) * 7, '#1D1A33');
   lineQ(524, 64, 524 + Math.cos(hh) * 4.5, 64 + Math.sin(hh) * 4.5, '#4A37C9');
   lineQ(524, 64, 524 + Math.cos(ss) * 7.5, 64 + Math.sin(ss) * 7.5, '#ff5c5c'); q(524, 64, '#1D1A33');
-  // телевизор: бежит график с заливкой
+  // телевизор: бежит график с заливкой, а если кто-то на диване смотрит ютуб, то ролик
+  if ([...agents.values()].some(a => a.yt && arrived(a) && a.place.act === 'tv')) {
+    const c = ['#5cc8ff', '#ff9ab8', '#7fe0b4', '#ffcf5c'][(t / 3 | 0) % 4];
+    Q(203, 57, 54, 23, '#0f0f0f'); Q(204, 58, 52, 18, c); Q(204, 66, 52, 10, shade(c, 0.7));
+    const bx = 206 + ((t * 9) % 42); Q(bx, 61, 7, 7, '#f7f5ff'); Q(bx + 2, 63, 3, 3, '#1D1A33');
+    Q(205, 59, 8, 6, '#ff2a2a'); Q(208, 60, 1, 4, '#ffffff'); Q(209, 61, 1, 2, '#ffffff');
+    Q(204, 77, 52, 1, '#3a3a3a'); Q(204, 77, Math.round(52 * ((t / 90) % 1)), 1, '#ff2a2a');
+  } else {
   const tv = rng((t * 1.5 | 0) + 5);
   Q(203, 57, 54, 23, '#16203e'); for (let y = 61; y < 80; y += 6) Q(203, y, 54, 1, '#1d2a50');
   let py = 70;
   for (let x = 0; x < 54; x++) {
     py = Math.max(60, Math.min(77, py + (tv() < 0.5 ? -1 : 1)));
     Q(203 + x, py + 1, 1, 79 - py, 'rgba(92,200,255,0.14)'); q(203 + x, py, x > 38 ? '#7fe0b4' : '#5cc8ff');
+  }
   }
   // пар от кофемашины
   for (let i = 0; i < 4; i++) { const p = (t * 0.8 + i / 4) % 1; Q(558 + Math.round(Math.sin(t * 2 + i) * 2), 88 - p * 16, 1, 1, `rgba(255,255,255,${(0.7 * (1 - p)).toFixed(2)})`); }
@@ -2046,6 +2168,8 @@ const ICON5 = {
   soundOn:  { rows: ['..#..', '.##.o', '###.o', '.##.o', '..#..'], col: '#E0DAFA', col2: '#7fe0b4' },
   soundOff: { rows: ['..#..', '.##..', '###.o', '.##..', '..#..'], col: '#6a628f', col2: '#ff5c5c' },
   bus:      { rows: ['####.', '#oo##', '#####', '.#..#', '.....'], col: '#9aab52', col2: '#9cc8ff' },
+  demoOn:   { rows: ['..#..', '#####', '#o#o#', '#####', '.#.#.'], col: '#b9a8ff', col2: '#7fe0b4' },
+  demoOff:  { rows: ['..#..', '#####', '#o#o#', '#####', '.#.#.'], col: '#6a628f', col2: '#3a3552' },
 };
 function pixIcon(x, y, u, ic) {
   for (let yy = 0; yy < 5; yy++) for (let xx = 0; xx < 5; xx++) {
@@ -2058,13 +2182,14 @@ function panel(t) {
   const u = Math.max(2, Math.round(2 * dpr)), fs = fontPx(2 * dpr), small = fs, lh = Math.round(fs * 1.3), pad = 6 * u;
   const list = [...agents.values()].filter(a => !a.leaving);
   const k = kyiv(), clock = `${String(k.h).padStart(2, '0')}:${String(k.m).padStart(2, '0')}`;
-  const head = 'AI-ОФІС', sub = online ? `в офісі: ${list.length}` : 'сервер не запущено';
+  const head = 'AI-ОФІС', sub = online ? `в офісі: ${list.length}` : demoOn ? 'демо · сервер не запущено' : 'сервер не запущено';
   const sun = sunTimes(), sunTxt = `схід ${kyivHM(sun.rise)} · захід ${kyivHM(sun.set)} · ${APP_VERSION}`;
   const opts = [
     { key: 'season', txt: `Сезон: ${SEASON_UA[season]}${seasonPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[season] },
     { key: 'weather', txt: `Погода: ${WEATHER_UA[weather]}${weatherPick === 'auto' ? ' · авто' : ''}`, ic: ICON5[weather] },
     { key: 'sound', txt: soundOn ? `Звук: увімк · ${Math.round(volume * 100)}%` : 'Звук: вимк', ic: soundOn ? ICON5.soundOn : ICON5.soundOff },
-    { key: 'bus', txt: bus ? 'Бусифікація…' : busTarget()?.kind === 'chatgpt' ? 'Бусифікувати GPT' : 'Бусифікувати', ic: ICON5.bus },
+    { key: 'bus', txt: bus ? 'Бусифікація…' : busTarget()?.kind === 'chatgpt' ? 'Бусифікувати GPT' : 'Бусифікувати', ic: ICON5.bus, half: true },
+    { key: 'demo', txt: demoOn ? 'Демо: увімк' : 'Демо: вимк', ic: demoOn ? ICON5.demoOn : ICON5.demoOff, half: true },
   ];
   ctx.textBaseline = 'middle';
   const rows = list.map(a => {
@@ -2073,7 +2198,13 @@ function panel(t) {
   });
   const btnH = lh + 2 * u, gap = 2 * u;
   ctx.font = `${small}px ${FONT_UI}`;
-  const optW = Math.max(...opts.map(o => ctx.measureText(o.txt).width)) + 16 * u;
+  const lines = [];                                  // ряди кнопок: дві «половинки» стають поруч
+  for (const o of opts) { const l = lines.at(-1); if (o.half && l && l[0].half && l.length < 2) l.push(o); else lines.push([o]); }
+  const optW = Math.max(...lines.map(l => l.reduce((s, o) => s + ctx.measureText(o.txt).width + 16 * u, 0) + gap * (l.length - 1)));
+  const place = (x0, y0, bw) => lines.flatMap((l, i) => {
+    const each = (bw - gap * (l.length - 1)) / l.length;
+    return l.map((o, j) => ({ ...o, x: Math.round(x0 + j * (each + gap)), y: y0 + i * (btnH + gap), w: Math.round(each), h: btnH }));
+  });
   if (SHOW_HUD) {
     ctx.font = `${fs}px ${FONT_UI}`;
     let w = ctx.measureText(head + '  ' + clock).width + 10 * u;
@@ -2082,7 +2213,7 @@ function panel(t) {
     for (const r of rows) w = Math.max(w, ctx.measureText(r.st).width + 9 * u);
     w = Math.round(Math.max(w, ctx.measureText(sub).width, ctx.measureText(sunTxt).width, optW, 120 * dpr) + pad * 2);
     const headH = lh + 2 * u, rowH = Math.round(lh * 1.55);
-    const h = pad + headH + u * 3 + Math.max(1, rows.length) * rowH + u * 2 + lh + u * 2 + btnH * opts.length + gap * (opts.length - 1) + pad;
+    const h = pad + headH + u * 3 + Math.max(1, rows.length) * rowH + u * 2 + lh + u * 2 + btnH * lines.length + gap * (lines.length - 1) + pad;
     const x = cv.width - w - 12 * u, y = 12 * u;
     ctx.globalAlpha = 0.94;
     pixelBox(x - u, y - u, w + 2 * u, h + 2 * u, u, '#4A37C9', 'rgba(74,55,201,0.35)');
@@ -2116,17 +2247,19 @@ function panel(t) {
     ry += u * 2;
     ctx.fillStyle = '#9a92c4'; ctx.fillText(sunTxt, x + pad, ry + lh / 2);
     ry += lh + u * 2;
-    btns = opts.map((o, i) => ({ ...o, x: x + pad - u * 2, y: ry + i * (btnH + gap), w: w - pad * 2 + u * 4, h: btnH }));
+    btns = place(x + pad - u * 2, ry, w - pad * 2 + u * 4);
   } else {
-    btns = opts.map((o, i) => ({ ...o, x: cv.width - Math.round(optW) - 12 * u, y: 12 * u + i * (btnH + gap), w: Math.round(optW), h: btnH }));
+    btns = place(cv.width - Math.round(optW) - 12 * u, 12 * u, Math.round(optW));
   }
   ctx.font = `${small}px ${FONT_UI}`;
   btns.forEach((bt, i) => {
     const hv = hover === i;
-    pixelBox(bt.x, bt.y, bt.w, bt.h, u, hv ? '#2e2760' : '#231e48', hv ? '#b9a8ff' : '#4A37C9');
+    const on = bt.key === 'demo' && demoOn;            // увімкнене демо: зелений фон, вимкнене: тьмяний
+    const fill = on ? (hv ? '#1f5a46' : '#17463a') : bt.key === 'demo' ? (hv ? '#262238' : '#1a1730') : hv ? '#2e2760' : '#231e48';
+    pixelBox(bt.x, bt.y, bt.w, bt.h, u, fill, on ? (hv ? '#b8f5d8' : '#7fe0b4') : bt.key === 'demo' ? (hv ? '#8a82b0' : '#4a4466') : hv ? '#b9a8ff' : '#4A37C9');
     pixIcon(bt.x + 4 * u, bt.y + Math.round(bt.h / 2) - Math.round(2.5 * u), u, bt.ic);
-    ctx.fillStyle = '#E0DAFA'; ctx.textAlign = 'left'; ctx.fillText(bt.txt, bt.x + 11 * u, bt.y + bt.h / 2 + 1);
-    ctx.fillStyle = '#7d6ef0'; ctx.textAlign = 'right'; ctx.fillText('›', bt.x + bt.w - 4 * u, bt.y + bt.h / 2 + 1);
+    ctx.fillStyle = bt.key === 'demo' && !demoOn ? '#8a82b0' : '#E0DAFA'; ctx.textAlign = 'left'; ctx.fillText(bt.txt, bt.x + 11 * u, bt.y + bt.h / 2 + 1);
+    if (!bt.half) { ctx.fillStyle = '#7d6ef0'; ctx.textAlign = 'right'; ctx.fillText('›', bt.x + bt.w - 4 * u, bt.y + bt.h / 2 + 1); }
   });
   ctx.textAlign = 'left';
 }
@@ -2136,6 +2269,7 @@ addEventListener('click', e => {
   if (bt.key === 'season') setSeason(SEASONS[(SEASONS.indexOf(seasonPick) + 1) % SEASONS.length]);
   else if (bt.key === 'weather') setWeather(WEATHERS[(WEATHERS.indexOf(weatherPick) + 1) % WEATHERS.length]);
   else if (bt.key === 'bus') busifyNow();
+  else if (bt.key === 'demo') setDemo(!demoOn);
   else setSound(!soundOn);
 });
 addEventListener('mousemove', e => { hover = btnAt(e); cv.style.cursor = hover >= 0 ? 'pointer' : 'default'; });
@@ -2167,11 +2301,31 @@ async function poll() {
     const res = await fetch(SERVER + '/state', { cache: 'no-store', signal: AbortSignal.timeout(1500) });
     const data = await res.json();
     online = true;
-    sync(data.agents || []);
+    sync(withDemo(data.agents || []));
   } catch {
     online = false;
-    sync([]);
+    sync(withDemo([]));
   }
+}
+// демо-моделі: заповнюють офіс, коли на комп'ютері немає справжніх. Щойно справжня модель тієї ж команди
+// з'являється онлайн, її демо-двійник іде додому, а в офіс заходить справжня
+let demoOn = store.get('office-demo') !== 'off';
+function setDemo(on) { demoOn = on; store.set('office-demo', on ? 'on' : 'off'); poll(); }
+const DEMO_BOTS = [
+  { id: 'demo-claude', kind: 'claude', name: 'Claude Code · демо', hooks: true },
+  { id: 'demo-codex', kind: 'codex', name: 'Codex · демо', hooks: true },
+  { id: 'demo-gpt', kind: 'chatgpt', name: 'ChatGPT · демо' },
+];
+const DEMO_TASKS = [['Edit', 'App.tsx'], ['Bash', 'npm test'], ['Read', 'README.md'], ['Grep', 'TODO'], ['WebSearch', 'pixel art'], ['думает', 'план'], ['Write', 'notes.md'], ['Edit', 'styles.css']];
+function withDemo(real) {
+  if (!demoOn) return real;
+  const t = performance.now() / 1000, have = new Set(real.map(x => GROUP[x.kind] || 'claude'));
+  const demo = DEMO_BOTS.filter(b => !have.has(GROUP[b.kind])).map((b, i) => {
+    // кожні дві хвилини демо-модель міняє заняття: то працює, то відпочиває
+    const r = rng(((t + i * 53) / 120 | 0) * 97 + i), working = r() < 0.6, [tool, detail] = DEMO_TASKS[r() * DEMO_TASKS.length | 0];
+    return { ...b, status: working ? 'working' : 'idle', tool: working && b.hooks ? tool : '', detail: working && b.hooks ? detail : '' };
+  });
+  return [...real, ...demo];
 }
 const DEMO_LIST = [
   { id: 'd1', kind: 'claude', name: 'Claude Code · tgti', status: 'working', tool: 'Edit', detail: 'JournalPage.tsx', hooks: true },
