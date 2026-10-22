@@ -2,7 +2,7 @@
 
 English · [Русский](README.ru.md)
 
-A pixel-art live wallpaper that turns the AI tools running on your computer into little office workers. On Windows it runs in [Wallpaper Engine](https://www.wallpaperengine.io/); on a Mac it is a small app that becomes your desktop wallpaper and also drops down from the MacBook notch. Open Claude Code, Codex, ChatGPT or the Claude desktop app, and a bot arrives in its own car, sits at a desk and starts typing. Close the program, and it walks out to the curb and rides home.
+A pixel-art live wallpaper that turns the AI tools running on your computer into little office workers. On Windows it runs in [Wallpaper Engine](https://www.wallpaperengine.io/); on a Mac it is a small app that becomes your desktop wallpaper and also drops down from the MacBook notch. Open Claude Code, Codex, ChatGPT, the Claude desktop app or a model in Ollama, and a bot arrives in its own car, sits at a desk and starts typing. Close the program, and it walks out to the curb and rides home.
 
 **Steam Workshop:** [subscribe to TheGrandees AI Office](https://steamcommunity.com/sharedfiles/filedetails/?id=3823996127). To see your own AI tools in the office, run the installer below once.
 
@@ -20,6 +20,7 @@ A pixel-art live wallpaper that turns the AI tools running on your computer into
 | Claude Code | orange | hooks: working, waiting for you, done |
 | Codex | white and black | hooks (approve them once in Codex with `/hooks`) |
 | ChatGPT (desktop app) | green | no hooks, "working" is guessed from CPU load |
+| Ollama | llama in headphones | arrives while a model is loaded (`/api/ps`), leaves when it unloads; "working" while the model answers |
 | Claude (desktop app) | light orange | same, from CPU load |
 
 - **Working:** the bot types, code runs on its monitor, and an icon shows the tool it uses (terminal, pencil, magnifier).
