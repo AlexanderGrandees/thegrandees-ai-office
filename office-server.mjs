@@ -1,6 +1,6 @@
 // Локальный сервер AI-офиса.
 // 1) Каждые 4 секунды смотрит, какие AI-программы открыты: Claude Code, приложение Claude, Codex, ChatGPT.
-//    Ollama сидит в офисе, пока в ней загружена модель (GET /api/ps); «работает», пока грузит процессор или модель только что отвечала.
+//    Ollama сидит в офисе, пока она открыта; «работает», пока грузит процессор или модель только что отвечала (GET /api/ps).
 //    Пока процесс открыт, его агент сидит в офисе. Закрыл окно: агент уходит.
 // 2) Хуки Claude Code и Codex присылают события (POST /event): работает, ждёт тебя, закончил.
 //    У ChatGPT и приложения Claude хуков нет: «работает» определяется по нагрузке на процессор.
@@ -140,10 +140,10 @@ async function scan() {
 }
 
 // ---------- Ollama ----------
-// Сервер Ollama часто запущен всегда (иконка в трее), поэтому лама приходит, только когда запущена любая модель:
-// загружена в Ollama (/api/ps) или открыт `ollama run`. Уходит, когда моделей не осталось. Название модели видно в табличке.
+// Лама сидит в офисе, пока Ollama открыта (как и другие ИИ: программа открыта, агент на месте).
+// «Работает», пока модель отвечает. В табличке название загруженной (или последней) модели.
 const OLLAMA = (() => { const h = process.env.OLLAMA_HOST || ''; const m = h.match(/:(\d+)\/?$/); return `http://127.0.0.1:${m ? m[1] : 11434}`; })();
-const ollama = { models: [], running: [], key: '', busyUntil: 0 };
+const ollama = { up: false, models: [], running: [], last: '', key: '', busyUntil: 0 };
 async function ollamaScan() {
   try {
     const r = await fetch(`${OLLAMA}/api/ps`, { signal: AbortSignal.timeout(1500) });
@@ -151,7 +151,8 @@ async function ollamaScan() {
     const key = models.map(m => `${m.name} ${m.expires_at}`).join('|');
     if (models.length && key !== ollama.key) ollama.busyUntil = Date.now() + 20e3;   // новый запрос продлевает модель: значит, она только что отвечала
     ollama.key = key; ollama.models = models.map(m => (m.name || '').replace(/:latest$/, ''));
-  } catch { ollama.models = []; ollama.key = ''; }
+    ollama.up = true; if (ollama.models[0]) ollama.last = ollama.models[0];
+  } catch { ollama.up = false; ollama.models = []; ollama.key = ''; }
 }
 // Пока обои спрашивают /state, сканируем каждые 4 с. Обои на паузе или закрыты: раз в 30 с, почти без нагрузки.
 let lastPoll = Date.now(), lastScan = 0;
@@ -293,10 +294,11 @@ function state() {
       hooks: !!s,
     });
   }
-  const model = ollama.models[0] || ollama.running[0];   // любая запущенная модель: загружена в Ollama или открыт `ollama run`
-  if (model) {
+  // лама в офисе, пока Ollama открыта (сервер отвечает или виден её процесс); работает, пока модель отвечает
+  const model = ollama.models[0] || ollama.running[0] || ollama.last;
+  if (ollama.up || procAgents.has(-2) || ollama.running.length) {
     const busy = procAgents.get(-2)?.cpuBusy || now < ollama.busyUntil;
-    out.push({ id: 'ollama', kind: 'ollama', name: `Ollama · ${model}`, status: busy ? 'working' : 'idle', tool: '', detail: model, hooks: false });
+    out.push({ id: 'ollama', kind: 'ollama', name: model ? `Ollama · ${model}` : 'Ollama', status: busy ? 'working' : 'idle', tool: '', detail: model, hooks: false });
   }
   // Сессия без найденного процесса (или сканирование недоступно): показываем, пока от неё были события за 2 минуты.
   const linked = new Set(byPid.values());
