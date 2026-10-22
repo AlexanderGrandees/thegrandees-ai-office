@@ -20,7 +20,7 @@ A pixel-art live wallpaper that turns the AI tools running on your computer into
 | Claude Code | orange | hooks: working, waiting for you, done |
 | Codex | white and black | hooks (approve them once in Codex with `/hooks`) |
 | ChatGPT (desktop app) | green | no hooks, "working" is guessed from CPU load |
-| Ollama | llama in headphones | arrives while a model is loaded (`/api/ps`), leaves when it unloads; "working" while the model answers |
+| Ollama | llama in headphones | arrives while any model runs (loaded in `/api/ps` or an open `ollama run`), leaves when none is left; "working" while the model answers |
 | Claude (desktop app) | light orange | same, from CPU load |
 
 - **Working:** the bot types, code runs on its monitor, and an icon shows the tool it uses (terminal, pencil, magnifier).

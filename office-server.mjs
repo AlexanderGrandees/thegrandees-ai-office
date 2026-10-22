@@ -110,6 +110,8 @@ async function scan() {
     }
     const table = new Map(list.map(p => [p.pid, p]));
     for (const p of list) p.kind = kindOf(p, table);
+    // открытые `ollama run <модель>`: модель считается запущенной, даже если Ollama уже выгрузила её из памяти
+    ollama.running = list.map(p => (p.cmd || '').match(/ollama(?:\.exe)?"?\s+run\s+([^\s"]+)/i)?.[1]).filter(Boolean).map(m => m.replace(/:latest$/, ''));
     procTable = table;
     // корень группы: процесс нужного вида, у которого родитель другого вида (вкладки Electron и дочерние процессы схлопываются)
     const roots = new Map();
@@ -138,10 +140,10 @@ async function scan() {
 }
 
 // ---------- Ollama ----------
-// Сервер Ollama часто запущен всегда (иконка в трее), поэтому лама приходит, только когда в Ollama загружена модель,
-// и уходит, когда модель выгрузилась (по умолчанию через 5 минут без запросов). Название модели видно в табличке.
+// Сервер Ollama часто запущен всегда (иконка в трее), поэтому лама приходит, только когда запущена любая модель:
+// загружена в Ollama (/api/ps) или открыт `ollama run`. Уходит, когда моделей не осталось. Название модели видно в табличке.
 const OLLAMA = (() => { const h = process.env.OLLAMA_HOST || ''; const m = h.match(/:(\d+)\/?$/); return `http://127.0.0.1:${m ? m[1] : 11434}`; })();
-const ollama = { models: [], key: '', busyUntil: 0 };
+const ollama = { models: [], running: [], key: '', busyUntil: 0 };
 async function ollamaScan() {
   try {
     const r = await fetch(`${OLLAMA}/api/ps`, { signal: AbortSignal.timeout(1500) });
@@ -291,9 +293,10 @@ function state() {
       hooks: !!s,
     });
   }
-  if (ollama.models.length) {
+  const model = ollama.models[0] || ollama.running[0];   // любая запущенная модель: загружена в Ollama или открыт `ollama run`
+  if (model) {
     const busy = procAgents.get(-2)?.cpuBusy || now < ollama.busyUntil;
-    out.push({ id: 'ollama', kind: 'ollama', name: `Ollama · ${ollama.models[0]}`, status: busy ? 'working' : 'idle', tool: '', detail: ollama.models[0], hooks: false });
+    out.push({ id: 'ollama', kind: 'ollama', name: `Ollama · ${model}`, status: busy ? 'working' : 'idle', tool: '', detail: model, hooks: false });
   }
   // Сессия без найденного процесса (или сканирование недоступно): показываем, пока от неё были события за 2 минуты.
   const linked = new Set(byPid.values());
