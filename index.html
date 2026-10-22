@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v1.4';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
+const APP_VERSION = 'v1.5';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -192,7 +192,7 @@ window.wallpaperPropertyListener = {
     }
   },
   // Wallpaper Engine ставит обои на паузу, когда открыта игра на весь экран: тогда и звук молчит
-  setPaused(p) { paused = p; if (ac) { if (p) ac.suspend(); else ac.resume().catch(() => {}); } },
+  setPaused(p) { if (p && !paused) pausedAt = performance.now(); if (paused && !p) onReveal(); paused = p; if (ac) { if (p) ac.suspend(); else ac.resume().catch(() => {}); } },
 };
 
 const SKY = { night: ['#0d0b24', '#1a1540', '#2b205a'], dusk: ['#4c2b70', '#cf6566', '#f0a05a'], day: ['#5b9de3', '#8cc2f0', '#c4e2f6'] };
@@ -2064,7 +2064,7 @@ function drawHearts() {
 // ---------- звук: всё синтезируется в WebAudio, без звуковых файлов ----------
 // Фон: дождь, ветер, гул города, машины. События: гром, клавиатуры, лампы, такси, кофе, реплики, сигнал «ждёт тебя».
 let soundOn = store.get('office-sound') !== 'off', volume = Math.max(0, Math.min(1, +(store.get('office-volume') ?? 35) / 100));
-let ac = null, master = null, beds = null, WHITE = null, BROWN = null, paused = false;
+let ac = null, master = null, beds = null, WHITE = null, BROWN = null, paused = false, pausedAt = 0;
 const sndNext = { cricket: 0, bird: 0 };
 function audioInit() {
   const AC = window.AudioContext || window.webkitAudioContext;
@@ -2432,6 +2432,25 @@ addEventListener('click', e => {
   else setSound(!soundOn);
 });
 addEventListener('mousemove', e => { hover = btnAt(e); cv.style.cursor = hover >= 0 ? 'pointer' : 'default'; });
+
+// людина вийшла з повноекранної програми (або гри), і шпалери знову видно: офіс «помітив» її
+// і робить вигляд, що працює. Не частіше 2 разів за 2 хвилини і тільки після паузи від 5 секунд.
+const reveals = [];
+function onReveal() {
+  const t = performance.now() / 1000;
+  if (performance.now() - pausedAt < 5000) return;
+  while (reveals.length && t - reveals[0] > 120) reveals.shift();
+  if (reveals.length >= 2 || bus || brief) return;
+  const here = [...agents.values()].filter(a => avail(a) && arrived(a) && !a.brk?.cafe && a.status !== 'waiting');
+  if (!here.length) return;
+  reveals.push(t);
+  if (talk) { for (const a of talk.who) if (a.say?.talk) a.say = null; talk = null; }
+  const a = pick(here), b = pick(here.filter(x => x !== a)) || a;
+  say(a, pick(['Опа, він дивиться!', 'Тихо, він дивиться!', 'Ой, нас бачать!']), t + 0.6, true);
+  later(t + 4.4, () => avail(b) && say(b, pick(['Робимо вигляд, що працюємо!', 'Всі за роботу!', 'Я тут працюю, чесно']), performance.now() / 1000, true));
+}
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = performance.now(); else if (hiddenAt) { pausedAt = hiddenAt; hiddenAt = 0; onReveal(); } });
 
 let last = performance.now();
 function loop(now) {
