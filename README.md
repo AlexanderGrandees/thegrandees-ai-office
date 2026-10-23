@@ -6,6 +6,8 @@ A pixel-art live wallpaper that turns the AI tools running on your computer into
 
 **Steam Workshop:** [subscribe to TheGrandees AI Office](https://steamcommunity.com/sharedfiles/filedetails/?id=3823996127). To see your own AI tools in the office, run the installer below once.
 
+**For entertainment only.** This is a pixel-art desktop toy, not a monitoring or productivity tool.
+
 ![Autumn night](docs/screenshots/autumn-night.png)
 
 | | |
