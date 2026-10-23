@@ -21,7 +21,19 @@ const CPU_BUSY = 0.05;              // доля одного ядра, выше 
 
 const WITH_WE = process.env.OFFICE_WITH_WE === '1';
 const IDLE_MS = 30e3;               // обои не спрашивали 30 с: сканируем редко
-const LABEL = { claude: 'Claude Code', 'claude-app': 'Claude', codex: 'Codex', chatgpt: 'ChatGPT', ollama: 'Ollama' };
+const LABEL = { claude: 'Claude Code', 'claude-app': 'Claude', codex: 'Codex', chatgpt: 'ChatGPT', ollama: 'Ollama',
+  gemini: 'Gemini', grok: 'Grok', deepseek: 'DeepSeek', qwen: 'Qwen', mistral: 'Mistral', perplexity: 'Perplexity', copilot: 'Copilot' };
+// інші ШІ: настільні програми та CLI; кожен вид — один агент, статус «працює» за навантаженням процесора
+const OTHER = ['gemini', 'grok', 'deepseek', 'qwen', 'mistral', 'perplexity', 'copilot'];
+const OTHER_RE = [
+  ['gemini', /^gemini(\.exe)?$/, /\/gemini\.app\//, /@google[\\/]gemini-cli/],
+  ['grok', /^grok(\.exe)?$/, /\/grok\.app\//, /grok-cli/],
+  ['deepseek', /^deepseek/, /\/deepseek\.app\//, null],
+  ['qwen', /^qwen(\.exe)?$/, /\/qwen\.app\//, /@qwen-code[\\/]qwen-code/],
+  ['mistral', /^(le ?chat|mistral|vibe(\.exe)?$)/, /\/(le chat|mistral)[^/]*\.app\//, /mistral[-_]vibe/],
+  ['perplexity', /^perplexity/, /\/perplexity\.app\//, null],
+  ['copilot', /^(microsoft ?|m365)?copilot(\.exe)?$/, /\/(microsoft )?copilot\.app\//, /@github[\\/]copilot/],
+];
 
 // ---------- процессы ----------
 let procTable = new Map();           // pid -> { pid, ppid, name, kind? }
@@ -52,11 +64,12 @@ function kindOf(p, table) {
     if (/claude-code|@anthropic-ai[\\/]claude/.test(cmd)) return 'claude';
     if (/@openai[\\/]codex/.test(cmd)) return 'codex';
   }
+  for (const [k, name, app, line] of OTHER_RE) if (name.test(n) || app.test(exe) || (line && line.test(cmd))) return k;
   return null;
 }
 
 function scanWindows() {
-  const ps = `$i='^(claude|codex.*|chatgpt|node|ollama.*)\\.exe$'
+  const ps = `$i='^(claude|codex.*|chatgpt|node|ollama.*|gemini.*|grok.*|deepseek.*|qwen.*|le ?chat.*|mistral.*|vibe|perplexity.*|m365copilot.*|copilot|microsoft ?copilot)\\.exe$'
 Get-CimInstance Win32_Process | ForEach-Object {
  if ($_.Name -match $i) { [pscustomobject]@{i=$_.ProcessId;p=$_.ParentProcessId;n=$_.Name;e=$_.ExecutablePath;c=$_.CommandLine;t=$_.KernelModeTime+$_.UserModeTime} }
  else { [pscustomobject]@{i=$_.ProcessId;p=$_.ParentProcessId;n=$_.Name} } } | ConvertTo-Json -Compress`;
@@ -120,7 +133,7 @@ async function scan() {
       let root = p;
       for (let up = table.get(p.ppid), guard = 0; up && up.kind === p.kind && guard < 20; up = table.get(up.ppid), guard++) root = up;
       // Codex запускает много отдельных процессов: все они один агент (ключ -1).
-      const key = root.kind === 'codex' ? -1 : root.kind === 'ollama' ? -2 : root.pid;   // Ollama: трей, сервер и раннер — тоже один агент
+      const key = root.kind === 'codex' ? -1 : root.kind === 'ollama' ? -2 : OTHER.includes(root.kind) ? -10 - OTHER.indexOf(root.kind) : root.pid;   // Ollama: трей, сервер и раннер — тоже один агент
       const r = roots.get(key) || { pid: key, kind: root.kind, cpu: 0 };
       r.cpu += p.cpu || 0;
       roots.set(key, r);

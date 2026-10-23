@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v1.5';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
+const APP_VERSION = 'v1.6';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -752,7 +752,16 @@ const KIND = {
   codex:       { head: '#ececf2', body: '#2c2c38', acc: '#7fdcff', eye: '#7fdcff', short: 'CODEX' },
   chatgpt:     { head: '#25c48a', body: '#0f7a52', acc: '#eafff5', eye: '#eafff5', short: 'GPT' },
   ollama:      { head: '#f6e7d2', body: '#25233a', acc: '#5b8cff', eye: '#1D1A33', short: 'OLLAMA', tag: '#5b8cff' },   // лама в навушниках і чорному худі
+  // інші ШІ: звичайні боти у кольорах свого бренду
+  gemini:      { head: '#8ab4f8', body: '#3c4fb0', acc: '#c58af9', eye: '#ffffff', short: 'GEMINI' },
+  grok:        { head: '#d4d4da', body: '#16161a', acc: '#ffffff', eye: '#ffffff', short: 'GROK' },
+  deepseek:    { head: '#6d8cf5', body: '#2b3f9e', acc: '#cfe0ff', eye: '#e8f0ff', short: 'DEEPSEEK' },
+  qwen:        { head: '#8b7cf6', body: '#4b3fb8', acc: '#e6e0ff', eye: '#ffffff', short: 'QWEN' },
+  mistral:     { head: '#ffaf3a', body: '#d9502a', acc: '#ffe08a', eye: '#fff1d0', short: 'MISTRAL' },
+  perplexity:  { head: '#5fc9c4', body: '#1f5f62', acc: '#d8fffb', eye: '#e9fffd', short: 'PPLX' },
+  copilot:     { head: '#7fb2ff', body: '#7a4fd6', acc: '#ffd36b', eye: '#ffffff', short: 'COPILOT' },
 };
+const OTHER_AI = ['gemini', 'grok', 'deepseek', 'qwen', 'mistral', 'perplexity', 'copilot'];
 const agents = new Map();
 const IDLE_TO_CHILL = FAST ? 6 : 40;                           // секунд без работы, после которых агент идёт отдыхать
 const IDLE_TO_SLEEP = 300;                           // на диване после стольких секунд засыпает
@@ -806,7 +815,7 @@ function leave(a) {
 }
 // кожен вихід на вулицю будь-якої моделі може закінчитись бусом (після паузи між бусами)
 function maybeBus(a, t) {
-  if (bus || brief?.team.includes(a)) return;
+  if (bus || missile || brief?.team.includes(a)) return;
   if (HASH.includes('bus') || (t > busNext && Math.random() < (FAST ? 1 : 0.5))) bus = { a, state: 'armed', at: t, exit: a.leaving };
 }
 // сам агент нікуди не зривається, поки не побув на місці хоча б MIN_STAY секунд; зовнішні події (нова задача, бус, вихід) діють одразу
@@ -964,7 +973,7 @@ const TOOL_UA = {
   WebSearch: ['гуглить', 'Гуглю'], WebFetch: ['читає сайт', 'Читаю сайт'], Task: ['кличе помічника', 'Кличу помічника'], Agent: ['кличе помічника', 'Кличу помічника'],
   'думает': ['думає над', 'Думаю над'],
 };
-const inChat = a => (a.kind === 'chatgpt' || a.kind === 'claude-app') && !a.hooks;
+const inChat = a => (a.kind === 'chatgpt' || a.kind === 'claude-app' || OTHER_AI.includes(a.kind)) && !a.hooks;
 function doing(a, first) {
   if (inChat(a)) return a.status === 'working' ? (first ? 'Пишу відповідь у чаті' : 'пише відповідь у чаті') : '';
   if (a.kind === 'ollama') return a.status === 'working' ? (first ? `Генерую локально${a.detail ? ' · ' + a.detail : ''}` : 'генерує локально') : '';
@@ -1002,8 +1011,28 @@ const LINES = {
 };
 const MAX_BUBBLES = 2;
 let cafeLine = false;
-function say(a, s, t, force) {
+// хмарки сусідів не накладаються: оцінюємо ширину хмарки в клітинках сцени (довгі репліки йдуть у два рядки)
+const measC = document.createElement('canvas').getContext('2d');
+function bubbleW(s) { measC.font = `${fontPx(ws * 0.4)}px ${FONT_UI}`; let w = measC.measureText(s).width; if (w > measC.measureText('x'.repeat(26)).width) w *= 0.56; return w / ws + 4; }
+function clash(a, s, t, skip = []) {
+  const wa = bubbleW(s), ya = a.labelY ?? a.y - 20;
+  for (const x of [...agents.values(), ...troops]) {
+    if (x === a || skip.includes(x) || !x.say || x.say.until < t || x.arriving || x.away || x.hidden) continue;
+    if (Math.abs(ya - (x.labelY ?? x.y - 20)) < 12 && Math.abs(a.x - x.x) < (wa + bubbleW(x.say.text)) / 2 + 1) return x;
+  }
+  return null;
+}
+function say(a, s, t, force, tries = 0) {
   if (a.brk?.brief && brief?.state === 'talk' && !cafeLine) return;                                  // на брифінгу говорять тільки по черзі
+  if (!talk?.who.includes(a)) {
+    const c = clash(a, s, t);
+    if (c && !force) { a.nextSay = t + rand(3, 6); return; }                                         // сусід ще говорить: репліка почекає
+    if (c && (cafeLine || bus || missile || (brief && brief.state === 'talk'))) c.say = null;          // сцена важливіша: чужа хмарка зникає
+    else if (c && tries < 4) {                                                                      // важлива репліка: дочекається, поки сусід договорить
+      later(c.say.until + 0.3, () => { if (agents.has(a.id) && !a.leaving) say(a, s, performance.now() / 1000, true, tries + 1); });
+      return;
+    }
+  }
   const c = a.brk?.chat;
   if (c && !cafeLine && c.i < c.lines.length && a.brk.cafe?.brk?.chat === c && c.i > 0) return;   // посеред розмови за столиком сторонні репліки не вклинюються
   const busy = [...agents.values()].filter(x => x !== a && x.say && x.say.until > t).length;
@@ -1015,6 +1044,13 @@ function say(a, s, t, force) {
     const cx = [...agents.values()].find(x => x.kind === 'codex' && avail(x));
     if (cx && Math.random() < (HASH.includes('puss') ? 1 : 0.1)) later(t + 2.6, () => avail(cx) && say(cx, 'А далі, Клоде… Кіт у чоботях!', performance.now() / 1000, true));
   }
+}
+// повернувся зі служби: у кожного своя історія
+const BACK = { gpt: ['Отримав медаль за бездіяльність', 'І там вигнали'], codex: ['Провів спецоперацію з випорожнення лімітів', 'Отримав медаль!'], ollama: ['Зекономила мільйон!'] };
+function backLine(a, t) {
+  const own = BACK[GROUP[a.kind]], s = own && Math.random() < 0.7 ? pick(own) : pick(LINES.back);
+  say(a, s, t, true);
+  if (s === 'Зекономила мільйон!') later(t + 4.4, () => avail(a) && say(a, '…і зекономлений мільйон кудись зник', performance.now() / 1000, true));
 }
 // відкладені репліки: відповідь звучить після того, як попередня хмарка дочиталась
 const queue = [];
@@ -1072,6 +1108,7 @@ function teaTick(t) {
 }
 // діалоги між агентами: GPT і Claude підколюють один одного, Codex теж, плюс нейтральні розмови
 const GROUP = { claude: 'claude', 'claude-app': 'claude', chatgpt: 'gpt', codex: 'codex', ollama: 'ollama' };
+for (const k of OTHER_AI) GROUP[k] = k;
 const DIALOGS = [
   { a: 'gpt', b: 'claude', lines: ['Гей, Клоде, глянь, що я намалював!', 'Ого! А чому в людини шість пальців?', 'Це художній стиль!'] },
   { a: 'claude', b: 'gpt', lines: ['Гей, GPT, дивись, як треба писати код', 'Ну-ну, а тести де?', 'Вже зелені!'] },
@@ -1102,7 +1139,7 @@ const DIALOGS = [
   { lines: ['Гарно сьогодні працюємо', 'Команда мрії!'] },
 ];
 // діалоги з реальної роботи: хто що править, хто чекає на тебе, хто пушить
-const VOC = { claude: 'Клоде', gpt: 'GPT', codex: 'Codex', ollama: 'Ламо' }, voc = a => VOC[GROUP[a.kind]];
+const VOC = { claude: 'Клоде', gpt: 'GPT', codex: 'Codex', ollama: 'Ламо', gemini: 'Gemini', grok: 'Grok', deepseek: 'DeepSeek', qwen: 'Qwen', mistral: 'Mistral', perplexity: 'Perplexity', copilot: 'Copilot' }, voc = a => VOC[GROUP[a.kind]];
 const busy = a => a.status === 'working';
 const WORK_DIALOGS = [
   { a: 'gpt', b: 'claude', when: (x, y) => busy(y) && y.files?.size >= 2, lines: (x, y) => [`Клоде, ти вже ${y.files.size}-й файл правиш?`, `Ще трошки, ${y.detail || 'майже все'}`] },
@@ -1116,7 +1153,12 @@ const WORK_DIALOGS = [
   { when: (x, y) => y.tool === 'думает' && y.detail, lines: (x, y) => [`${voc(y)}, про що думаєш?`, `Про «${y.detail}»`] },
   { when: (x, y) => busy(x) && busy(y), lines: ['Ти теж у роботі?', 'По вуха в коді'] },
 ];
-const EARLY = 1200;                                  // перші 20 хвилин після запуску розмов більше, щоб офіс одразу ожив
+const JOKES = ['Дах їхав додому, не хотів спати на вулиці зимою', 'Купіть Лемура!'];
+function jokeRound(here, t) {
+  const crew = [...here].sort(() => Math.random() - 0.5).slice(0, 4), jk = [...JOKES].sort(() => Math.random() - 0.5);
+  crew.forEach((a, i) => later(t + 0.3 + i * 4.2, () => avail(a) && say(a, i < jk.length ? jk[i] : pick(['Ха-ха!', 'Ну ти й жартівник', 'Смішно…']), performance.now() / 1000, true)));
+  nextTalk = t + crew.length * 4.2 + 30;
+}
 let talk = null, nextTalk = FAST ? 14 : 20;
 function dialogTick(t) {
   const ok = a => a && agents.has(a.id) && !a.arriving && !a.leaving && !a.away && !a.held && !a.brk?.cafe && !a.brk?.brief && !a.brk?.errand && arrived(a);
@@ -1128,17 +1170,21 @@ function dialogTick(t) {
     }
     if (t < talk.next) return;
     const sp = talk.who[talk.i % 2];
-    say(sp, talk.lines[talk.i], t, true); sp.say.talk = true; sp.nextSay = t + 12;
-    if (++talk.i >= talk.lines.length) { talk = null; nextTalk = t + (FAST ? rand(15, 25) : t < EARLY ? rand(20, 45) : rand(90, 220)); }
+    if (clash(sp, talk.lines[talk.i], t, talk.who)) { talk.next = t + 0.5; return; }               // поруч хтось інший говорить: чекаємо
+    for (const w of talk.who) if (w !== sp && w.say?.talk) w.say = null;                             // попередня репліка співрозмовника вже прочитана
+    say(sp, talk.lines[talk.i], t, true); if (!sp.say) return; sp.say.talk = true; sp.nextSay = t + 12;
+    if (++talk.i >= talk.lines.length) { talk = null; nextTalk = t + (FAST ? rand(15, 25) : rand(90, 220)); }
     else talk.next = t + 3.8;
     return;
   }
-  if (t < nextTalk) return;
+  if (t < nextTalk || missile) return;
   nextTalk = t + 10;
   const here = [...agents.values()].filter(ok);
   const pairs = [];
   for (const x of here) for (const y of here) if (x !== y && zoneOf(x) === zoneOf(y)) pairs.push([x, y]);
   if (!pairs.length) return;
+  // рідко (5%) усі по черзі жартують
+  if (Math.random() < (HASH.includes('jokes') ? 1 : 0.05)) { jokeRound(here, t); return; }
   const fits = [], work = [];
   for (const d of WORK_DIALOGS) for (const [x, y] of pairs) {
     if ((d.a && GROUP[x.kind] !== d.a) || (d.b && GROUP[y.kind] !== d.b) || !d.when(x, y)) continue;
@@ -1160,7 +1206,7 @@ const BRIEF_LEAD = ['claude', 'codex', 'gpt'];
 function briefTick(t) {
   if (!brief) {
     if (t < briefNext) return;
-    if (bus) { briefNext = t + 30; return; }
+    if (bus || missile) { briefNext = t + 30; return; }
     const team = [...agents.values()].filter(a => avail(a) && a.status !== 'waiting' && !a.brk?.forced);
     if (team.length < 2) { briefNext = t + 60; return; }
     // ведучий — той, хто зараз вільний (Claude, потім Codex, потім GPT)
@@ -1199,9 +1245,15 @@ function briefTick(t) {
     if (brief.team.length < 2) { endBrief(t); return; }
     for (const c of brief.called) c.done = true;                // хто не встиг, той пропускає
     const L = brief.lead, lines = [[L, pick(['Отже, коротко по задачах', 'Стендап! По черзі, коротко', 'Що в кого? Коротко'])]];
+    let forgot = false;
     for (const a of brief.team.filter(a => a !== L).slice(0, 3)) {
       lines.push([L, `${voc(a)}${a.tagNo > 1 ? ' ' + a.tagNo : ''}, що в тебе?`]);
-      lines.push([a, a.status === 'working' ? doing(a, true) || pick(['Працюю над задачею', 'В процесі, все йде']) : pick(['Чекаю нову задачу', 'Вільний, беру будь-що', 'Все здав, чекаю'])]);
+      const idle25 = a.status !== 'working' && a.idleSince !== null && t - a.idleSince > 1500;   // без роботи понад 25 хвилин
+      let ans = a.status === 'working' ? doing(a, true) || pick(['Працюю над задачею', 'В процесі, все йде']) : pick(['Чекаю нову задачу', 'Вільний, беру будь-що', 'Все здав, чекаю']);
+      if (a.kind === 'ollama' && idle25) ans = 'Всі дрібні дії виконала';
+      else if (idle25 && !forgot) { ans = 'Мене забули…'; forgot = true; }
+      else if (a.kind === 'chatgpt' && Math.random() < 0.25) ans = 'Прикинувся клавокунем';
+      lines.push([a, ans]);
     }
     lines.push([L, pick(['Все, по місцях!', 'Дякую, працюємо!', 'Супер, розходимось'])]);
     Object.assign(brief, { state: 'talk', lines, next: t + 0.6 });
@@ -1252,7 +1304,7 @@ function cafeChat(a, t) {
 function chatTick(a, t) {
   if (a.say && a.say.until < t) a.say = null;
   if (a.brk?.cafe && arrived(a) && !a.leaving && !a.held) { cafeChat(a, t); return; }
-  if (a.held || a.say || t < a.nextSay || a.leaving || !arrived(a)) return;
+  if (a.held || a.say || t < a.nextSay || a.leaving || !arrived(a) || missile) return;
   const act = activity(a, t);
   if (act === 'brief' || act === 'serve') return;      // на брифінгу говорять по черзі, з чаєм у руках не до балачок
   if (act === 'work' && (a.detail || inChat(a) || a.kind === 'ollama') && Math.random() < 0.6) { say(a, doing(a, true), t, false); return; }
@@ -1599,7 +1651,7 @@ function rideStep(type, dt, t) {
         if (!a.exitAt) a.exitAt = t + 0.7 * n++;
         if (t >= a.exitAt) {
           a.arriving = false; a.exitAt = 0; a.x = 192; a.y = 181; a.nextSay = Math.max(a.nextSay, t + 3); r.busy = t;
-          if (a.back) { a.back = false; say(a, pick(LINES.back), t, true); }
+          if (a.back) { a.back = false; backLine(a, t); }
           catGreet(a);
         }
       } else if (atCurb(a) && !a.held && bus?.a !== a) { agents.delete(a.id); r.busy = t; }
@@ -1623,6 +1675,7 @@ function carStep(dt, t) {
   }
   for (const type in RIDE) rideStep(type, dt, t);
   busStep(dt, t);
+  missileStep(t);
   // машины в одном ряду не наезжают друг на друга и ждут за стоящей машиной
   for (const c of cars) {
     if (c.bus) continue;                               // бус едет сам
@@ -1692,6 +1745,76 @@ function drawCar(c, t) {
     g.save(); g.globalCompositeOperation = 'lighter'; g.fillStyle = gr;
     g.beginPath(); g.moveTo(hx0, c.y - 4); g.lineTo(hx0 + dx * 30, c.y - 9); g.lineTo(hx0 + dx * 30, c.y + 9); g.lineTo(hx0, c.y + 4); g.closePath(); g.fill(); g.restore();
     if (brake) glow(tx / S, c.y, 6, 5, '255,60,60', 0.3);
+  }
+}
+
+// ---------- крилата ракета: ШІ перехоплюють, перепрограмовують і повертають відправнику ----------
+// Хтось кричить «Крилата ракета!», Codex перехоплює, ракета прилітає зліва і зависає над офісом, поки Claude перепрограмовує маршрут,
+// на «Повернути відправнику» розвертається на 180°, на «Завантажив!» відлітає назад, ліворуч.
+let missile = null, missileNext = HASH.includes('missile') ? 6 : FAST ? 50 : rand(2400, 5400);
+const missC = document.createElement('canvas'); missC.width = 44; missC.height = 20;
+const mctx = missC.getContext('2d'); mctx.setTransform(S, 0, 0, S, 0, 0);
+const MS = { o: '#2a2833', b: '#a3a3ae', l: '#cdcdd5', d: '#74747f', n: '#868692', w: '#8c8c98', nz: '#55555f', eye: '#24222c' };
+function missileSay(a, text, t) { if (missile) for (const x of [missile.icp, missile.prg]) if (x) x.say = null; if (a && avail(a)) { if (a.say) a.say = null; say(a, text, t, true); a.nextSay = t + 12; } }
+function missileStep(t) {
+  if (!missile) {
+    if (t < missileNext) return;
+    if (bus || brief) { missileNext = t + 60; return; }
+    const here = [...agents.values()].filter(a => avail(a) && arrived(a) && !a.brk?.cafe);
+    if (here.length < 2) { missileNext = t + (HASH.includes('missile') ? 5 : 120); return; }
+    if (talk) { for (const a of talk.who) if (a.say?.talk) a.say = null; talk = null; }
+    const icp = here.find(a => a.kind === 'codex') || pick(here);
+    const prg = here.find(a => GROUP[a.kind] === 'claude' && a !== icp) || pick(here.filter(a => a !== icp));
+    missile = { at: t, icp, prg, x: -30, y: 18, sx: 1, step: 0, flame: 1 };
+    missileSay(pick(here), 'Крилата ракета!', t); sfx.siren(); sfx.whoosh(0.3);
+    return;
+  }
+  const m = missile, s2 = t - m.at, out = p => 1 - Math.pow(1 - p, 3);
+  const line = (n, at, a, text, snd) => { if (m.step < n && s2 > at) { m.step = n; missileSay(a, text, t); snd?.(); } };
+  line(1, 2.2, m.icp, 'Починаю перехоплення!');
+  line(2, 6.0, m.prg, 'Перепрограмовую маршрут…', () => { sfx.hum(); sfx.chirp(); });
+  line(3, 10.0, m.prg, 'Повернути відправнику!', () => sfx.turn());
+  line(4, 13.0, m.icp, m.icp?.kind === 'ollama' ? 'Завантажила!' : 'Завантажив!', () => sfx.whoosh(0));
+  if (s2 < 6) { const p = out(s2 / 6); m.x = -30 + (120 + 30) * p; m.y = 18 + 28 * p; m.flame = 1 - p * 0.7; m.hover = false; }
+  else if (s2 < 13) {                                            // зависла над офісом
+    m.x = 120; m.y = 46 + Math.round(Math.sin(t * 3) * 1.2 * S) / S; m.hover = true; m.flame = 0.3;
+    m.sx = s2 < 10 ? 1 : Math.cos(Math.min(1, (s2 - 10) / 1.1) * Math.PI);     // розворот на 180°
+  } else {                                                       // летить назад, ліворуч, звідки прилетіла
+    const p = Math.min(1, (s2 - 13) / 2.6);
+    m.sx = -1; m.hover = false; m.flame = 1; m.x = 120 - (120 + 60) * p * p; m.y = 46 - 40 * p * p;
+    if (p >= 1) { missile = null; missileNext = t + (FAST ? 90 : rand(2400, 5400)); }
+  }
+}
+function drawMissile(t) {
+  const m = missile;
+  if (!m) return;
+  cur = mctx; mctx.clearRect(0, 0, 44, 20);
+  const M = MS, fl = (t * 14 | 0) % 2;
+  // полум'я двигуна позаду (ракета дивиться носом праворуч, на розвороті дзеркалиться)
+  const len = Math.round((6 + fl * 2) * m.flame);
+  if (len > 1) { Q(8 - len, 9, len, 4, 'rgba(176,120,230,0.85)'); Q(8 - Math.round(len * 0.6), 10, Math.round(len * 0.6), 2, '#ffbd7a'); }
+  Q(7, 8, 3, 6, M.o); Q(8, 9, 2, 4, M.nz);
+  Q(9, 1, 5, 7, M.o); Q(10, 2, 3, 6, M.w); Q(13, 4, 2, 4, M.o); Q(13, 5, 1, 3, M.w);       // хвостовий стабілізатор
+  Q(10, 7, 27, 8, M.o); Q(11, 8, 25, 6, M.b); Q(11, 8, 25, 1, M.l); Q(11, 13, 25, 1, M.d);  // корпус
+  Q(17, 8, 1, 6, '#7f8ea6'); Q(18, 8, 1, 6, '#b3aa7c');                                   // стримана синьо-жовта смужка
+  Q(36, 8, 3, 6, M.o); Q(36, 9, 3, 4, M.n); Q(39, 9, 2, 4, M.o); Q(39, 10, 2, 2, M.n); Q(41, 10, 1, 2, M.o);   // ніс
+  Q(19, 13, 9, 3, M.o); Q(20, 14, 7, 1, M.w); Q(18, 15, 6, 2, M.o); Q(19, 15, 4, 1, M.w);   // крило
+  Q(10, 14, 4, 3, M.o); Q(11, 14, 2, 2, M.w);
+  // мордочка: очі кліпають, усмішка
+  if ((t % 3.2) > 0.12) { Q(30, 9, 1, 2, M.eye); Q(33, 9, 1, 2, M.eye); }
+  q(31, 12, M.eye); q(32, 12, M.eye); q(29, 11, '#c9a3aa'); q(34, 11, '#c9a3aa');
+  cur = g;
+  if (m.hover) {                                                 // тінь на підлозі і реактивний струмінь донизу
+    discQ(m.x * S, (m.y + 26) * S, 22, 'rgba(20,16,40,0.18)', 0.3);
+    const h = 10 + fl * 4, jx = (m.x - m.sx * 1) * S; Q(jx - 4, (m.y + 7) * S, 8, h, 'rgba(176,120,230,0.7)'); Q(jx - 2, (m.y + 7) * S, 4, h - 4, '#ffd6a8');
+  }
+  g.save(); g.translate(Math.round(m.x * S) / S, Math.round(m.y * S) / S); g.scale(m.sx, 1); g.imageSmoothingEnabled = false;
+  g.drawImage(missC, -22, -10, 44, 20); g.restore();
+  // індикатор уваги, поки ракета летить до офісу
+  if (missile.step < 1 && (t * 3 | 0) % 2) {
+    const X = (m.x + (m.sx < 0 ? -26 : 26)) * S, Y = (m.y - 16) * S;
+    for (let i = 0; i < 8; i++) Q(X - i, Y + i, i * 2 + 1, 1, '#e0504a');
+    Q(X, Y + 2, 1, 3, '#fff1e0'); q(X, Y + 6, '#fff1e0');
   }
 }
 
@@ -1774,19 +1897,19 @@ function busStep(dt, t) {
   }
   const s2 = t - bus.at;
   if (bus.state === 'stop') {
-    if (s2 > 0.5 && !van.side) {
+    if (s2 > 0.4 && !van.side) {
       van.side = true; sfx.door();
       const d = local(van, 1, -7);
       bus.A = trooper(d.x, d.y, [{ x: d.x, y: 174.5 }, { x: a.x + 17, y: 174.5 }], 'A');
     }
-    if (s2 > 1.0 && !van.rear) {
+    if (s2 > 0.8 && !van.rear) {
       van.rear = true; sfx.door();
       const r = local(van, -16, 0);
       bus.B = trooper(r.x, r.y, [{ x: r.x - 3, y: 180.5 }, { x: a.x - 17, y: 180.5 }, { x: a.x - 17, y: 174.5 }], 'B');
     }
     const A = bus.A, B = bus.B;
-    if (A) moveAlong(A, dt, 30);
-    if (B) moveAlong(B, dt, 30);
+    if (A) moveAlong(A, dt, 38);
+    if (B) moveAlong(B, dt, 38);
     if (A && B && !A.path.length && !B.path.length) {
       A.dir = 'left'; B.dir = 'right'; if (here) a.dir = 'right';
       bus.state = 'talk'; bus.at = t; troopSay(A, "Пред'явіть документи!", t);
@@ -1796,12 +1919,12 @@ function busStep(dt, t) {
   const A = bus.A, B = bus.B;
   if (bus.state === 'talk') {
     if (!here) { bus.state = 'board'; bus.at = t; return; }
-    if (s2 > 2.6 && !bus.d1) { bus.d1 = 1; a.doc = true; a.gen = 0; aSay(a, bus.reserve ? 'Ось, свіжий резерв з відстрочкою' : pick(['Ось, будь ласка', 'Ось мої документи', 'Тримайте…']), t); }
-    if (s2 > 4.4 && !bus.d2) { bus.d2 = 1; a.doc = false; A.doc = true; }                          // військовий гортає документи
+    if (s2 > 2.1 && !bus.d1) { bus.d1 = 1; a.doc = true; a.gen = 0; aSay(a, bus.reserve ? 'Ось, свіжий резерв з відстрочкою' : pick(['Ось, будь ласка', 'Ось мої документи', 'Тримайте…']), t); }
+    if (s2 > 3.5 && !bus.d2) { bus.d2 = 1; a.doc = false; A.doc = true; }                          // військовий гортає документи
     // у Claude з документами все гаразд: його відпускають, і він іде на лавочку
     const legit = GROUP[a.kind] === 'claude';
-    if (s2 > 7.2 && !bus.d3) { bus.d3 = 1; A.doc = false; troopSay(A, bus.reserve ? 'Відстрочка є. Все добре, ви вільні' : legit ? 'Ви вільні' : 'Бусифікуємо!', t); }
-    if (legit && s2 > 9.6) {
+    if (s2 > 5.8 && !bus.d3) { bus.d3 = 1; A.doc = false; troopSay(A, bus.reserve ? 'Відстрочка є. Все добре, ви вільні' : legit ? 'Ви вільні' : a.kind === 'ollama' ? 'На службі вітаються дешеві рішення!' : 'Бусифікуємо!', t); }
+    if (legit && s2 > 7.7) {
       aSay(a, pick(['Дякую, гарного дня!', 'Дякую!', 'Слава Україні!']), t);
       const d = bus.door = local(van, 1, -7);
       A.path = [{ x: d.x, y: 174.5 }, d]; B.path = [{ x: d.x - 2, y: 174.5 }, d];
@@ -1809,8 +1932,10 @@ function busStep(dt, t) {
       a.dir = 'right';                                   // стоїть, поки бус не поїде, потім іде на лавочку
       return;
     }
-    if (s2 > 11.4 && !bus.d4) { bus.d4 = 1; aSay(a, pick(['Але ж я просто ШІ…', 'Я ж бот!', 'А як же мій код?']), t); }
-    if (s2 > 14.2) {
+    if (s2 > 9.1 && !bus.d4) { bus.d4 = 1; bus.bot = Math.random() < 0.5; aSay(a, bus.bot ? 'Я ж бот!' : pick(['Але ж я просто ШІ…', 'А як же мій код?']), t); }
+    // на «Я ж бот!» другий військовий одразу відповідає, без розмов
+    if (bus.bot && s2 > 11.3 && !bus.d5) { bus.d5 = 1; troopSay(B, pick(['В третю штурмову!', 'В піхоті знадобишся!', 'Підеш наземним безпілотником!', 'Будеш НРК водити!', 'На Лиман, в НРК підеш!']), t); }
+    if (s2 > (bus.bot ? 13.6 : 11.4)) {
       // військові підходять впритул і хапають агента під руки
       bus.door = local(van, 1, -7); bus.state = 'board'; bus.at = t;
       A.path = [{ x: a.x + 7, y: 174.5 }]; B.path = [{ x: a.x - 7, y: 174.5 }];
@@ -1820,20 +1945,20 @@ function busStep(dt, t) {
   if (bus.state === 'board') {
     const d = bus.door || (bus.door = local(van, 1, -7));
     if (!bus.thrown) {
-      const inA = moveAlong(A, dt, 26), inB = moveAlong(B, dt, 26);
+      const inA = moveAlong(A, dt, 32), inB = moveAlong(B, dt, 32);
       if (!here) { bus.thrown = t; }
       else if (inA && inB && !bus.grab) { bus.grab = t; bus.x0 = a.x; bus.y0 = a.y; A.dir = 'left'; B.dir = 'right'; aSay(a, pick(['Пустіть!', 'А-а-а!', 'Ой-ой-ой!']), t); }
       if (bus.grab) {
         // закидають у бус: агент летить дугою, перекидаючись, у бічні двері
-        const p = Math.max(0, Math.min(1, (t - bus.grab - 0.7) / 0.75));
+        const p = Math.max(0, Math.min(1, (t - bus.grab - 0.55) / 0.65));
         a.x = bus.x0 + (d.x - bus.x0) * p; a.y = bus.y0 + (d.y - bus.y0) * p - Math.sin(p * Math.PI) * 16;
         if (p > 0) a.dir = ['down', 'right', 'up', 'left'][(p * 8 | 0) % 4];
         if (p >= 1) { bus.thrown = t; draft(a, t); sfx.door(); A.path = [{ x: d.x, y: 174.5 }, d]; B.path = [{ x: d.x, y: 174.5 }, d]; }
       }
       return;
     }
-    if (!A.hidden && moveAlong(A, dt, 30)) A.hidden = true;
-    if (!B.hidden && t - bus.thrown > 0.4 && moveAlong(B, dt, 30)) B.hidden = true;
+    if (!A.hidden && moveAlong(A, dt, 38)) A.hidden = true;
+    if (!B.hidden && t - bus.thrown > 0.3 && moveAlong(B, dt, 38)) B.hidden = true;
     if (A.hidden && B.hidden) { bus.state = 'close'; bus.at = t; }
     return;
   }
@@ -2108,7 +2233,7 @@ function burst(dur, vol, filters, when = 0, attack = 0.004, brown = false) {
   gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol, t0 + attack); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
   node.connect(gn); gn.connect(master); src.start(t0, Math.random() * 1.5); src.stop(t0 + dur + 0.05);
 }
-const VOICE = { claude: 520, 'claude-app': 600, codex: 380, chatgpt: 700, ollama: 450, tck: 230 };
+const VOICE = { claude: 520, 'claude-app': 600, codex: 380, chatgpt: 700, ollama: 450, gemini: 640, grok: 340, deepseek: 560, qwen: 600, mistral: 480, perplexity: 660, copilot: 580, tck: 230 };
 const sfx = {
   blip(kind) { const f = VOICE[kind] || 500; for (let i = 0; i < 3; i++) tone(f * (0.9 + Math.random() * 0.25), 0.05, 'square', 0.018, i * 0.07); },
   ding() { tone(880, 0.3, 'triangle', 0.07); tone(1320, 0.4, 'triangle', 0.05, 0.13); },
@@ -2126,6 +2251,11 @@ const sfx = {
   },
   screech() { if (!sndOk()) return; burst(0.9, 0.09, [filt('bandpass', 2300, 9)], 0, 0.02); tone(1250, 0.8, 'sawtooth', 0.008, 0, 900); },
   rev() { tone(70, 1.3, 'sawtooth', 0.03, 0, 190); },
+  whoosh(d) { if (!sndOk()) return; burst(1.8, 0.07, [filt('bandpass', 700, 1.2)], d, 0.7); tone(180, 1.8, 'sawtooth', 0.012, d, 90); },
+  hum() { tone(95, 4, 'triangle', 0.035, 0, 105); tone(190, 4, 'sine', 0.012, 0, 210); },
+  chirp() { for (let i = 0; i < 8; i++) tone(900 + Math.random() * 900, 0.06, 'square', 0.012, 0.4 + i * 0.11); },
+  turn() { tone(260, 1.1, 'triangle', 0.035, 0, 620); },
+  siren() { for (let i = 0; i < 3; i++) tone(620, 0.45, 'triangle', 0.03, i * 0.5, 880); },
   munch() { if (sndOk()) for (let i = 0; i < 4; i++) burst(0.04, 0.05, [filt('bandpass', 1400, 2)], i * 0.18); },
   door() { if (sndOk()) burst(0.09, 0.14, [filt('lowpass', 380)], 0, 0.004, true); },
   pour() { if (sndOk()) burst(1.8, 0.04, [filt('bandpass', 2600, 1.2)], 0.1, 0.25); },
@@ -2252,6 +2382,7 @@ function frame(t, dt) {
   drawFlash();
   drawTreat(t);
   drawHearts();
+  drawMissile(t);
   for (const a of agents.values()) drawLabel(a, t);
   for (const o of troops) drawTrooperLabel(o, t);
 }
@@ -2280,7 +2411,15 @@ function bubbles(t) {
   cat.labelY = cat.y - (cat.path.length || cat.mode === 'sleep' || cat.mode === 'sofa' ? 7 : 9);
   for (const a of [...agents.values(), cat, ...troops]) {
     if (!a.say || a.say.until < t || a.arriving || a.away || a.hidden) continue;
-    const w = Math.ceil(ctx.measureText(a.say.text).width) + pad * 2 + u * 2, h = fs + pad * 2;
+    // довга репліка: два рядки, розрив по пробілу ближче до середини
+    let ls = [a.say.text];
+    if (ctx.measureText(a.say.text).width > ctx.measureText('x'.repeat(26)).width) {
+      const s = a.say.text, mid = s.length / 2; let br = -1;
+      for (let i = 0; i < s.length; i++) if (s[i] === ' ' && (br < 0 || Math.abs(i - mid) < Math.abs(br - mid))) br = i;
+      if (br > 0) ls = [s.slice(0, br), s.slice(br + 1)];
+    }
+    const lineH = Math.round(fs * 1.15);
+    const w = Math.ceil(Math.max(...ls.map(l => ctx.measureText(l).width))) + pad * 2 + u * 2, h = fs + pad * 2 + (ls.length - 1) * lineH;
     const cxp = Math.round(ox + a.x * ws), bottom = oy + ((a.labelY ?? a.y - 20) - 2) * ws;
     const x = Math.max(4 * u, Math.min(cv.width - w - 4 * u, Math.round(cxp - w / 2))), y = Math.round(bottom - h - u * 2);
     const fade = Math.min(1, (a.say.until - t) / 0.4, (t - (a.say.at ?? a.say.until - (a === cat ? 3 : 4))) / 0.2);
@@ -2288,7 +2427,7 @@ function bubbles(t) {
     pixelBox(x, y, w, h, u, '#f7f5ff', '#1D1A33');
     ctx.fillStyle = '#1D1A33'; ctx.fillRect(cxp - u, y + h - u, u * 3, u); ctx.fillRect(cxp, y + h, u, u * 2);
     ctx.fillStyle = '#f7f5ff'; ctx.fillRect(cxp, y + h - u, u, u);
-    ctx.fillStyle = '#1D1A33'; ctx.fillText(a.say.text, x + pad + u, y + h / 2 + 1);
+    ctx.fillStyle = '#1D1A33'; ls.forEach((l, i) => ctx.fillText(l, x + pad + u, y + pad + fs / 2 + 1 + i * lineH));
     ctx.globalAlpha = 1;
   }
 }
@@ -2440,7 +2579,7 @@ function onReveal() {
   const t = performance.now() / 1000;
   if (performance.now() - pausedAt < 5000) return;
   while (reveals.length && t - reveals[0] > 120) reveals.shift();
-  if (reveals.length >= 2 || bus || brief) return;
+  if (reveals.length >= 2 || bus || brief || missile) return;
   const here = [...agents.values()].filter(a => avail(a) && arrived(a) && !a.brk?.cafe && a.status !== 'waiting');
   if (!here.length) return;
   reveals.push(t);

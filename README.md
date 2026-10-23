@@ -23,6 +23,7 @@ A pixel-art live wallpaper that turns the AI tools running on your computer into
 | Codex | white and black | hooks (approve them once in Codex with `/hooks`) |
 | ChatGPT (desktop app) | green | no hooks, "working" is guessed from CPU load |
 | Ollama | llama in headphones | sits in the office while Ollama is open; "working" while the model answers |
+| Gemini, Grok, DeepSeek, Qwen, Mistral, Perplexity, Copilot | brand colours | desktop app or CLI is open; "working" by CPU load |
 | Claude (desktop app) | light orange | same, from CPU load |
 
 - **Working:** the bot types, code runs on its monitor, and an icon shows the tool it uses (terminal, pencil, magnifier).
