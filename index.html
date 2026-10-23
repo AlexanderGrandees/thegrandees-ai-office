@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v1.6';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
+const APP_VERSION = 'v1.7';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -1751,7 +1751,7 @@ function drawCar(c, t) {
 // ---------- крилата ракета: ШІ перехоплюють, перепрограмовують і повертають відправнику ----------
 // Хтось кричить «Крилата ракета!», Codex перехоплює, ракета прилітає зліва і зависає над офісом, поки Claude перепрограмовує маршрут,
 // на «Повернути відправнику» розвертається на 180°, на «Завантажив!» відлітає назад, ліворуч.
-let missile = null, missileNext = HASH.includes('missile') ? 6 : FAST ? 50 : rand(2400, 5400);
+let missile = null, missileNext = HASH.includes('missile') ? 6 : FAST ? 50 : rand(60, 135), missileSeen = false;   // перша ракета — у перші 2,5 хв
 const missC = document.createElement('canvas'); missC.width = 44; missC.height = 20;
 const mctx = missC.getContext('2d'); mctx.setTransform(S, 0, 0, S, 0, 0);
 const MS = { o: '#2a2833', b: '#a3a3ae', l: '#cdcdd5', d: '#74747f', n: '#868692', w: '#8c8c98', nz: '#55555f', eye: '#24222c' };
@@ -1759,12 +1759,13 @@ function missileSay(a, text, t) { if (missile) for (const x of [missile.icp, mis
 function missileStep(t) {
   if (!missile) {
     if (t < missileNext) return;
-    if (bus || brief) { missileNext = t + 60; return; }
+    if (bus || brief) { missileNext = t + (missileSeen ? 60 : 4); return; }
     const here = [...agents.values()].filter(a => avail(a) && arrived(a) && !a.brk?.cafe);
-    if (here.length < 2) { missileNext = t + (HASH.includes('missile') ? 5 : 120); return; }
+    if (here.length < (missileSeen ? 2 : 1)) { missileNext = t + (HASH.includes('missile') || !missileSeen ? 5 : 120); return; }
     if (talk) { for (const a of talk.who) if (a.say?.talk) a.say = null; talk = null; }
     const icp = here.find(a => a.kind === 'codex') || pick(here);
     const prg = here.find(a => GROUP[a.kind] === 'claude' && a !== icp) || pick(here.filter(a => a !== icp));
+    missileSeen = true;
     missile = { at: t, icp, prg, x: -30, y: 18, sx: 1, step: 0, flame: 1 };
     missileSay(pick(here), 'Крилата ракета!', t); sfx.siren(); sfx.whoosh(0.3);
     return;
@@ -1838,6 +1839,8 @@ function trooper(x, y, path, role) { const o = { x, y, path, dir: 'left', ph: Ma
 function quiet() { if (bus?.a) bus.a.say = null; for (const o of troops) o.say = null; }
 function troopSay(o, text, t) { quiet(); o.say = { text, until: t + 4 }; sfx.blip('tck'); }
 function aSay(a, text, t) { quiet(); say(a, text, t, true); }
+const PROTESTS = ['Я ж бот!', 'А як же мій код?', 'Я ж бот!', 'Але ж я просто ШІ…'];
+let protestI = Math.random() * 4 | 0;
 let reserveSeen = false;                             // Клод уперше бачить бус: точно генерує резерв, далі в 30% випадків
 function moveAlong(o, dt, v) {
   if (!o.path.length) return true;
@@ -1932,9 +1935,9 @@ function busStep(dt, t) {
       a.dir = 'right';                                   // стоїть, поки бус не поїде, потім іде на лавочку
       return;
     }
-    if (s2 > 9.1 && !bus.d4) { bus.d4 = 1; bus.bot = Math.random() < 0.5; aSay(a, bus.bot ? 'Я ж бот!' : pick(['Але ж я просто ШІ…', 'А як же мій код?']), t); }
-    // на «Я ж бот!» другий військовий одразу відповідає, без розмов
-    if (bus.bot && s2 > 11.3 && !bus.d5) { bus.d5 = 1; troopSay(B, pick(['В третю штурмову!', 'В піхоті знадобишся!', 'Підеш наземним безпілотником!', 'Будеш НРК водити!', 'На Лиман, в НРК підеш!']), t); }
+    // відмовки по черзі, щоб не повторювались; на «Я ж бот!» і «А як же мій код?» другий військовий одразу відповідає
+    if (s2 > 9.1 && !bus.d4) { bus.d4 = 1; bus.ex = PROTESTS[protestI++ % PROTESTS.length]; aSay(a, bus.ex, t); bus.bot = bus.ex !== 'Але ж я просто ШІ…'; }
+    if (bus.bot && s2 > 11.3 && !bus.d5) { bus.d5 = 1; troopSay(B, bus.ex === 'А як же мій код?' ? 'На службі допишеш!' : pick(['В третю штурмову!', 'В піхоті знадобишся!', 'Підеш наземним безпілотником!', 'Будеш НРК водити!', 'На Лиман, в НРК підеш!']), t); }
     if (s2 > (bus.bot ? 13.6 : 11.4)) {
       // військові підходять впритул і хапають агента під руки
       bus.door = local(van, 1, -7); bus.state = 'board'; bus.at = t;
