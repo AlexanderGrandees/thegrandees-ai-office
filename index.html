@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v1.7';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
+const APP_VERSION = 'v1.8';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -906,7 +906,7 @@ function sync(list) {
   for (const s of list) {
     seen.add(s.id);
     const a = agents.get(s.id) || newAgent(s);
-    a.name = s.name; a.tool = s.tool || ''; a.detail = s.detail || ''; a.hooks = !!s.hooks;
+    a.name = s.name; a.model = s.model || ''; a.tool = s.tool || ''; a.detail = s.detail || ''; a.hooks = !!s.hooks;
     if (a.detail && /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(a.tool)) (a.files ||= new Set()).add(a.detail);
     if (a.status !== s.status) { a.status = s.status; a.idleSince = s.status === 'idle' ? t : null; if (s.status === 'waiting' && !a.arriving) { say(a, pick(LINES.wait), t, true); sfx.ding(); } }
     a.leaving = false;
@@ -1442,6 +1442,12 @@ function neonTag(name, cx, y, col) {
   Q(X - 4, Y - 3, tw + 8, 16, '#0e0b1c'); Q(X - 3, Y - 2, tw + 6, 14, col); Q(X - 2, Y - 1, tw + 4, 12, '#17142c');
   textQ(name, X, Y + 1, 2, col);
 }
+// дрібний підпис моделі над табличкою: CLAUDE, а над ним OPUS 5.5
+function modelTag(m, cx, y, col) {
+  const tw = textW(m), X = Math.round(cx * S - tw / 2), Y = Math.round(y * S) - 10;
+  Q(X - 2, Y - 2, tw + 4, 9, '#0e0b1c'); Q(X - 1, Y - 1, tw + 2, 7, '#17142c');
+  textQ(m, X, Y, 1, col);
+}
 function drawLabel(a, t) {
   if (a.arriving || a.away) return;
   const k = KIND[a.kind], x = a.x, top = (Math.round(a.y * S) - 22 + (sitting(a) ? 4 : 0)) / S;
@@ -1449,8 +1455,9 @@ function drawLabel(a, t) {
   const sofa = arrived(a) && a.place.sit && !a.place.desk && a.place.lane === 82;
   const cafeR = a.brk?.cafe && arrived(a) && a.place === CAFE[1];   // за столиком таблички не налазять одна на одну
   const ly = top - 9 - ((sofa && CHILL.indexOf(a.place) % 2) || cafeR ? 7 : 0);
-  a.labelY = ly;
+  a.labelY = a.model ? ly - 4 : ly;                       // місце для дрібного рядка з моделлю над табличкою
   neonTag(name, x, ly, k.tag || k.head);
+  if (a.model) modelTag(a.model, x, ly, k.tag || k.head);
   if (!arrived(a)) return;
   const bx = x + 6, by = top + 1, act = activity(a, t);
   if (act === 'wait' || (act === 'check' && bus && bus.state !== 'come' && !bus.free)) {
@@ -2636,10 +2643,10 @@ let demoPref = store.get('office-demo'), demoOn = false;
 const demoAuto = () => { demoOn = demoPref === 'on' || (demoPref !== 'off' && !online); };
 function setDemo(on) { demoPref = on ? 'on' : 'off'; store.set('office-demo', demoPref); demoAuto(); poll(); }
 const DEMO_BOTS = [
-  { id: 'demo-claude', kind: 'claude', name: 'Claude Code · демо', hooks: true },
+  { id: 'demo-claude', kind: 'claude', name: 'Claude Code · демо', hooks: true, model: 'OPUS 5.5' },
   { id: 'demo-codex', kind: 'codex', name: 'Codex · демо', hooks: true },
   { id: 'demo-gpt', kind: 'chatgpt', name: 'ChatGPT · демо' },
-  { id: 'demo-ollama', kind: 'ollama', name: 'Ollama · демо', detail: 'llama3.2' },
+  { id: 'demo-ollama', kind: 'ollama', name: 'Ollama · демо', detail: 'llama3.2', model: 'LLAMA3.2' },
 ];
 const DEMO_TASKS = [['Edit', 'App.tsx'], ['Bash', 'npm test'], ['Read', 'README.md'], ['Grep', 'TODO'], ['WebSearch', 'pixel art'], ['думает', 'план'], ['Write', 'notes.md'], ['Edit', 'styles.css']];
 function withDemo(real) {
@@ -2653,11 +2660,11 @@ function withDemo(real) {
   return [...real, ...demo];
 }
 const DEMO_LIST = [
-  { id: 'd1', kind: 'claude', name: 'Claude Code · tgti', status: 'working', tool: 'Edit', detail: 'JournalPage.tsx', hooks: true },
+  { id: 'd1', kind: 'claude', name: 'Claude Code · tgti', status: 'working', tool: 'Edit', detail: 'JournalPage.tsx', hooks: true, model: 'OPUS 5.5' },
   { id: 'd2', kind: 'codex', name: 'Codex', status: 'waiting', tool: 'Bash', detail: 'git push', hooks: true },
   { id: 'd3', kind: 'chatgpt', name: 'ChatGPT', status: 'working' },
   { id: 'd4', kind: 'claude-app', name: 'Claude', status: 'idle' },
-  { id: 'd5', kind: 'ollama', name: 'Ollama · llama3.2', status: 'working', detail: 'llama3.2' },
+  { id: 'd5', kind: 'ollama', name: 'Ollama · llama3.2', status: 'working', detail: 'llama3.2', model: 'LLAMA3.2' },
 ];
 function refreshScene() {
   season = seasonNow(); phase = phaseNow();
