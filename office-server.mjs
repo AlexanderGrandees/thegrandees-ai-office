@@ -226,6 +226,15 @@ const myVersion = () => { try { return fs.readFileSync(VERSION_FILE, 'utf8').rep
 // ---------- сессии из хуков ----------
 const sessions = new Map();
 
+// claude-opus-5-5[1m] → OPUS 5.5, claude-3-5-haiku-20241022 → HAIKU 3.5, gpt-5-codex → GPT-5-CODEX
+function modelTag(id) {
+  const m = String(id || '').toLowerCase().replace(/\[.*?\]/g, '').replace(/-\d{8}$/, '').replace(/:latest$/, '').trim();
+  if (!m) return '';
+  const fam = m.match(/opus|sonnet|haiku|fable/)?.[0];
+  if (fam) return `${fam} ${m.split(/[-.]/).filter(x => /^\d{1,2}$/.test(x)).join('.')}`.trim().toUpperCase();
+  return m.toUpperCase().slice(0, 14);
+}
+
 function folderOf(cwd) { return String(cwd || '').split(/[\\/]/).filter(Boolean).pop()?.slice(0, 24) || ''; }
 
 function apply(ev) {
@@ -233,9 +242,10 @@ function apply(ev) {
   if (!id) return;
   const now = Date.now();
   let s = sessions.get(id);
-  if (!s) { s = { id, kind: ev.agent === 'codex' ? 'codex' : 'claude', folder: '', status: 'idle', tool: '', detail: '', last: now, ppid: 0, pid: 0 }; sessions.set(id, s); }
+  if (!s) { s = { id, kind: ev.agent === 'codex' ? 'codex' : 'claude', folder: '', model: '', status: 'idle', tool: '', detail: '', last: now, ppid: 0, pid: 0 }; sessions.set(id, s); }
   if (ev.cwd) s.folder = folderOf(ev.cwd);
   if (ev.ppid) s.ppid = Number(ev.ppid);
+  if (ev.model) s.model = modelTag(ev.model);
   s.last = now;
   const msg = String(ev.message || '');
   const detail = String(ev.detail || '').slice(0, 24);
@@ -305,17 +315,18 @@ function state() {
       tool: fresh ? s.tool : '',
       detail: fresh && s.status !== 'idle' ? s.detail : '',
       hooks: !!s,
+      model: s?.model || '',
     });
   }
   // лама в офисе, пока Ollama открыта (сервер отвечает или виден её процесс); работает, пока модель отвечает
   const model = ollama.models[0] || ollama.running[0] || ollama.last;
   if (ollama.up || procAgents.has(-2) || ollama.running.length) {
     const busy = procAgents.get(-2)?.cpuBusy || now < ollama.busyUntil;
-    out.push({ id: 'ollama', kind: 'ollama', name: model ? `Ollama · ${model}` : 'Ollama', status: busy ? 'working' : 'idle', tool: '', detail: model, hooks: false });
+    out.push({ id: 'ollama', kind: 'ollama', name: model ? `Ollama · ${model}` : 'Ollama', status: busy ? 'working' : 'idle', tool: '', detail: model, hooks: false, model: modelTag(model) });
   }
   // Сессия без найденного процесса (или сканирование недоступно): показываем, пока от неё были события за 2 минуты.
   const linked = new Set(byPid.values());
-  for (const s of live) if (!linked.has(s) && (!lastScanOk || now - s.last < 120e3)) out.push({ id: s.id, kind: s.kind, name: LABEL[s.kind] + (s.folder ? ` · ${s.folder}` : ''), status: s.status, tool: s.tool, detail: s.status !== 'idle' ? s.detail : '', hooks: true });
+  for (const s of live) if (!linked.has(s) && (!lastScanOk || now - s.last < 120e3)) out.push({ id: s.id, kind: s.kind, name: LABEL[s.kind] + (s.folder ? ` · ${s.folder}` : ''), status: s.status, tool: s.tool, detail: s.status !== 'idle' ? s.detail : '', hooks: true, model: s.model });
   return out;
 }
 

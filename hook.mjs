@@ -3,7 +3,10 @@
 // Полный текст запросов и команд НЕ отправляется. Кроме id сессии, папки, события и имени инструмента
 // уходит только короткая подпись (detail): имя файла, первые слова команды, домен сайта
 // или первые 6 символов запроса с «…». Всё остаётся на этом компьютере (127.0.0.1).
+// Ещё уходит имя модели (например claude-opus-5-5): из события или из хвоста файла переписки сессии.
 // Всегда выходит с кодом 0, чтобы никогда не мешать работе Claude, даже если сервер выключен.
+import fs from 'node:fs';
+
 const URL = `http://127.0.0.1:${process.env.OFFICE_PORT || 7777}/event`;
 setTimeout(() => process.exit(0), 2000);
 
@@ -29,6 +32,22 @@ function detailOf(ev) {
   return undefined;
 }
 
+// какая модель сейчас отвечает: Claude Code кладёт её в SessionStart, а в остальных событиях
+// берём последнюю из файла переписки (читаем только хвост, это быстро)
+function modelOf(ev) {
+  if (ev.model) return String(typeof ev.model === 'object' ? ev.model.id || ev.model.display_name || '' : ev.model).slice(0, 60) || undefined;
+  if (!ev.transcript_path) return undefined;
+  try {
+    const fd = fs.openSync(ev.transcript_path, 'r');
+    try {
+      const size = fs.fstatSync(fd).size, n = Math.min(size, 256 * 1024), buf = Buffer.alloc(n);
+      fs.readSync(fd, buf, 0, n, size - n);
+      const all = [...buf.toString('utf8').matchAll(/"model"\s*:\s*"((?:claude|gpt|o\d)[^"]{1,58})"/g)].map(m => m[1]);
+      return all.at(-1);
+    } finally { fs.closeSync(fd); }
+  } catch { return undefined; }
+}
+
 let raw = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', c => { raw += c; });
@@ -37,6 +56,7 @@ process.stdin.on('end', async () => {
     const ev = JSON.parse(raw);
     const body = {
       detail: detailOf(ev),
+      model: modelOf(ev),
       agent: process.argv[2] === 'codex' ? 'codex' : 'claude',
       ppid: process.ppid,
       session_id: ev.session_id,
