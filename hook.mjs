@@ -33,19 +33,25 @@ function detailOf(ev) {
 }
 
 // какая модель сейчас отвечает: Claude Code кладёт её в SessionStart, а в остальных событиях
-// берём последнюю из файла переписки (читаем только хвост, это быстро)
+// берём последнюю из файла переписки, читая с конца (хвост растёт, пока не найдём)
 function modelOf(ev) {
   if (ev.model) return String(typeof ev.model === 'object' ? ev.model.id || ev.model.display_name || '' : ev.model).slice(0, 60) || undefined;
   if (!ev.transcript_path) return undefined;
+  const re = /"model"\s*:\s*"((?:claude|gpt|o\d)[^"]{1,58})"/g;
+  let fd;
   try {
-    const fd = fs.openSync(ev.transcript_path, 'r');
-    try {
-      const size = fs.fstatSync(fd).size, n = Math.min(size, 256 * 1024), buf = Buffer.alloc(n);
-      fs.readSync(fd, buf, 0, n, size - n);
-      const all = [...buf.toString('utf8').matchAll(/"model"\s*:\s*"((?:claude|gpt|o\d)[^"]{1,58})"/g)].map(m => m[1]);
-      return all.at(-1);
-    } finally { fs.closeSync(fd); }
+    fd = fs.openSync(ev.transcript_path, 'r');
+    const size = fs.fstatSync(fd).size;
+    // ищем с конца: последний ответ мог оказаться далеко за большим результатом инструмента
+    for (let n = 256 * 1024; ; n *= 4) {
+      const start = Math.max(0, size - n), buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      const all = [...buf.toString('utf8').matchAll(re)].map(m => m[1]);
+      if (all.length) return all.at(-1);
+      if (start === 0 || n >= 16 * 1024 * 1024) return undefined;
+    }
   } catch { return undefined; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
 let raw = '';
