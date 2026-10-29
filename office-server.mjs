@@ -17,6 +17,8 @@ import { fileURLToPath } from 'node:url';
 const PORT = Number(process.env.OFFICE_PORT || 7777);
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SCAN_MS = 4000;
+const GONE_MS = 15e3;               // столько пропавший процесс ещё сидит в офисе
+const SETTLE_MS = 15e3;             // новый процесс без хуков появляется в офисе, только прожив столько
 const CPU_BUSY = 0.05;              // доля одного ядра, выше которой считаем, что программа «думает»
 
 const WITH_WE = process.env.OFFICE_WITH_WE === '1';
@@ -50,7 +52,7 @@ function kindOf(p, table) {
     if (!desktopPath) return 'claude';
     const parent = table.get(p.ppid);
     const parentIsApp = parent && (parent.name || '').toLowerCase() === 'claude.exe';
-    if (parentIsApp && !cmd.includes('--type=')) return 'claude';   // сессия Claude Code внутри приложения
+    if (parentIsApp && !cmd.includes('--type=')) { p.appChild = true; return 'claude'; }   // Claude Code внутри приложения: сессия или служебный процесс
     return 'claude-app';
   }
   // macOS / Linux: имена без .exe, программы лежат в *.app
@@ -134,20 +136,22 @@ async function scan() {
       for (let up = table.get(p.ppid), guard = 0; up && up.kind === p.kind && guard < 20; up = table.get(up.ppid), guard++) root = up;
       // Codex запускает много отдельных процессов: все они один агент (ключ -1).
       const key = root.kind === 'codex' ? -1 : root.kind === 'ollama' ? -2 : OTHER.includes(root.kind) ? -10 - OTHER.indexOf(root.kind) : root.pid;   // Ollama: трей, сервер и раннер — тоже один агент
-      const r = roots.get(key) || { pid: key, kind: root.kind, cpu: 0 };
+      const r = roots.get(key) || { pid: key, kind: root.kind, cpu: 0, appChild: !!root.appChild };
       r.cpu += p.cpu || 0;
       roots.set(key, r);
     }
     const now = Date.now();
     for (const [pid, r] of roots) {
       let a = procAgents.get(pid);
-      if (!a) { a = { pid, kind: r.kind, firstSeen: now, cpuPrev: r.cpu, cpuBusy: false, busyUntil: 0 }; procAgents.set(pid, a); continue; }
+      if (!a) { a = { pid, kind: r.kind, appChild: r.appChild, firstSeen: now, cpuPrev: r.cpu, cpuBusy: false, busyUntil: 0 }; procAgents.set(pid, a); continue; }
+      a.goneSince = 0;
       const load = (r.cpu - a.cpuPrev) / (SCAN_MS / 1000);
       a.cpuPrev = r.cpu;
       if (load > CPU_BUSY) a.busyUntil = now + 20e3;     // после всплеска считаем занятым ещё 20 секунд
       a.cpuBusy = now < a.busyUntil;
     }
-    for (const pid of [...procAgents.keys()]) if (!roots.has(pid)) procAgents.delete(pid);
+    // процесс пропал: ждём GONE_MS, вдруг это сбой сканирования или перезапуск, чтобы агент не уезжал и не приезжал снова
+    for (const [pid, a] of procAgents) if (!roots.has(pid)) { a.goneSince ||= now; if (now - a.goneSince > GONE_MS) procAgents.delete(pid); }
     await ollamaScan();
   } finally { scanning = false; }
 }
@@ -226,14 +230,17 @@ const myVersion = () => { try { return fs.readFileSync(VERSION_FILE, 'utf8').rep
 // ---------- сессии из хуков ----------
 const sessions = new Map();
 
-// claude-opus-5-5[1m] → OPUS 5.5, claude-3-5-haiku-20241022 → HAIKU 3.5, gpt-5-codex → GPT-5-CODEX
+// claude-opus-5-5[1m] → OPUS 5.5, claude-3-5-haiku-20241022 → HAIKU 3.5, gpt-5-codex → GPT-5-CODEX, deepseek-r1:14b → DEEPSEEK-R1
 function modelTag(id) {
   const m = String(id || '').toLowerCase().replace(/\[.*?\]/g, '').replace(/-\d{8}$/, '').replace(/:latest$/, '').trim();
   if (!m) return '';
   const fam = m.match(/opus|sonnet|haiku|fable/)?.[0];
   if (fam) return `${fam} ${m.split(/[-.]/).filter(x => /^\d{1,2}$/.test(x)).join('.')}`.trim().toUpperCase();
-  return m.toUpperCase().slice(0, 14);
+  const n = m.split(':')[0];                                    // qwen2.5-coder:7b → QWEN2.5-CODER; длиннее 12 знаков налазит на соседей
+  return (n.length > 12 ? n.split('-')[0] : n).toUpperCase().slice(0, 12);
 }
+// модели Ollama известных брендов приходят в офис своим ботом: qwen2.5 → Qwen, deepseek-r1 → DeepSeek
+const brandOf = m => /^qwen/i.test(m) ? 'qwen' : /^deepseek/i.test(m) ? 'deepseek' : /^(mistral|mixtral|codestral|ministral|devstral)/i.test(m) ? 'mistral' : null;
 
 function folderOf(cwd) { return String(cwd || '').split(/[\\/]/).filter(Boolean).pop()?.slice(0, 24) || ''; }
 
@@ -306,6 +313,8 @@ function state() {
   for (const a of [...procAgents.values()].sort((x, y) => x.firstSeen - y.firstSeen)) {
     if (a.kind === 'ollama') continue;                  // лама добавляется ниже, по загруженной модели
     const s = byPid.get(a.pid);
+    // приложение Claude само запускает служебные процессы Claude Code: агентом считаем только тот, от которого пришли хуки
+    if (!s && (a.appChild || now - a.firstSeen < SETTLE_MS)) continue;
     const fresh = s && now - s.last < 10 * 60e3;
     out.push({
       id: `${a.kind}-${a.pid}`,
@@ -319,10 +328,20 @@ function state() {
     });
   }
   // лама в офисе, пока Ollama открыта (сервер отвечает или виден её процесс); работает, пока модель отвечает
-  const model = ollama.models[0] || ollama.running[0] || ollama.last;
-  if (ollama.up || procAgents.has(-2) || ollama.running.length) {
+  // лама в офисе, пока Ollama открыта; модели брендов (Qwen, DeepSeek, Mistral) сидят за своими ботами, пока загружены
+  const loaded = [...new Set([...ollama.models, ...ollama.running])];
+  const own = loaded.filter(m => !brandOf(m));
+  const model = own[0] || (brandOf(ollama.last) ? '' : ollama.last);
+  if (ollama.up || procAgents.has(-2) || loaded.length) {
     const busy = procAgents.get(-2)?.cpuBusy || now < ollama.busyUntil;
-    out.push({ id: 'ollama', kind: 'ollama', name: model ? `Ollama · ${model}` : 'Ollama', status: busy ? 'working' : 'idle', tool: '', detail: model, hooks: false, model: modelTag(model) });
+    out.push({ id: 'ollama', kind: 'ollama', name: model ? `Ollama · ${model}` : 'Ollama', status: busy && own.length ? 'working' : 'idle', tool: '', detail: model, hooks: false, model: modelTag(model) });
+    const have = new Set(out.map(x => x.kind));
+    for (const m of loaded) {
+      const k = brandOf(m);
+      if (!k || have.has(k)) continue;
+      have.add(k);
+      out.push({ id: `ollama-${k}`, kind: k, name: `${LABEL[k]} · Ollama`, status: busy ? 'working' : 'idle', tool: '', detail: m, hooks: false, model: modelTag(m) });
+    }
   }
   // Сессия без найденного процесса (или сканирование недоступно): показываем, пока от неё были события за 2 минуты.
   const linked = new Set(byPid.values());
