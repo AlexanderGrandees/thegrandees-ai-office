@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v1.8';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
+const APP_VERSION = 'v1.9';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -2621,6 +2621,7 @@ function loop(now) {
 
 // ---------- данные ----------
 let online = false, seenVersion = '';
+let lastOk = 0;
 async function poll() {
   // #leave: в демо Codex через 15 с уходит, чтобы проверить такси
   if (DEMO) { online = true; sync(DEMO_LIST.filter(x => !(HASH.includes('leave') && x.id === 'd2' && performance.now() > 15000))); return; }
@@ -2630,7 +2631,10 @@ async function poll() {
     online = true; demoAuto();
     if (data.version) { if (seenVersion && data.version !== seenVersion) { location.reload(); return; } seenVersion = data.version; }   // офіс оновився: беремо нову сторінку
     sync(withDemo(data.agents || []));
+    lastOk = performance.now();
   } catch {
+    // один пропущенный ответ (сервер задумался, комп нагружен) не повод всем уезжать: ждём 20 с тишины
+    if (lastOk && performance.now() - lastOk < 20e3) return;
     online = false; demoAuto();
     sync(withDemo([]));
   }
