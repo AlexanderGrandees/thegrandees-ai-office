@@ -2,7 +2,7 @@
 
 English · [Русский](README.ru.md)
 
-A pixel-art live wallpaper that turns the AI tools running on your computer into little office workers. On Windows it runs in [Wallpaper Engine](https://www.wallpaperengine.io/); on a Mac it is a small app that becomes your desktop wallpaper and also drops down from the MacBook notch. Open Claude Code, Codex, ChatGPT, the Claude desktop app or a model in Ollama, and a bot arrives in its own car, sits at a desk and starts typing. Close the program, and it walks out to the curb and rides home.
+A pixel-art live wallpaper that turns the AI tools running on your computer into little office workers. On Windows it runs in [Wallpaper Engine](https://www.wallpaperengine.io/); on a Mac it is a small app that becomes your desktop wallpaper and also drops down from the MacBook notch. On Linux it is a small native window on the background layer of Wayland compositors such as Hyprland and Sway. Open Claude Code, Codex, ChatGPT, the Claude desktop app or a model in Ollama, and a bot arrives in its own car, sits at a desk and starts typing. Close the program, and it walks out to the curb and rides home.
 
 **Steam Workshop:** [subscribe to TheGrandees AI Office](https://steamcommunity.com/sharedfiles/filedetails/?id=3823996127). To see your own AI tools in the office, run the installer below once.
 
@@ -50,7 +50,7 @@ A pixel-art live wallpaper that turns the AI tools running on your computer into
 
 ## Install
 
-The installer downloads one tiny empty file from this repo's releases on the first install, so the author can count installs. Nothing about you or your computer is sent.
+The Windows and Mac installers download one tiny empty file from this repo's releases on the first install, so the author can count installs. Nothing about you or your computer is sent.
 
 ### Windows 10 / 11
 
@@ -87,6 +87,34 @@ No admin password needed. It installs `~/Applications/TGTI AI Office.app`, uses 
 
 Test without any AI running: with the office open, run `node test-agent.mjs TEST` in the install folder. A test bot walks in, works, asks for permission, rests and leaves.
 
+### Linux (Wayland: Hyprland, Sway)
+
+Install the build dependencies first (GTK 3, gtk-layer-shell, WebKitGTK 4.1, a C compiler, Node.js 18 or newer):
+
+```bash
+# Arch
+sudo pacman -S --needed base-devel gtk3 gtk-layer-shell webkit2gtk-4.1 nodejs
+# Fedora
+sudo dnf install gcc pkgconf gtk3-devel gtk-layer-shell-devel webkit2gtk4.1-devel nodejs
+# Ubuntu 24.04+
+sudo apt install build-essential pkg-config libgtk-3-dev libgtk-layer-shell-dev libwebkit2gtk-4.1-dev nodejs
+```
+
+Then open a terminal inside your Wayland session and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-office/main/linux/install.sh | bash
+```
+
+No sudo needed. The installer:
+- puts the office into `~/.local/share/tgti-ai-office` and builds a small wallpaper window there;
+- adds the hooks for Claude Code and Codex;
+- adds a systemd user service `tgti-ai-office.service` that starts the office with your graphical session. The office server runs only while this window runs.
+
+Hyprland: add `exec-once = systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP && systemctl --user restart tgti-ai-office.service` to `hyprland.conf` (on Sway use the same line with `exec`). Wallpaper tools such as hyprpaper, swww and swaybg draw on the same layer and can cover the office, so stop them. On NVIDIA, if the window stays blank, run `systemctl --user edit tgti-ai-office` and add two lines, `[Service]` and `Environment=WEBKIT_DISABLE_DMABUF_RENDERER=1`, then run `systemctl --user restart tgti-ai-office` (edit does not restart the service).
+
+Limits: only Wayland compositors with wlr-layer-shell work. GNOME and X11 are not supported. KDE Plasma 6 has not been tested. There are no automatic updates: run the install command again to update.
+
 ## Settings
 
 - **Season and weather:** the buttons in the panel, or the *Season* and *Weather* properties in Wallpaper Engine's wallpaper settings.
@@ -99,14 +127,15 @@ Test without any AI running: with the office open, run `node test-agent.mjs TEST
 - The hook sends the session id, the folder name, the event name, the tool name (`Bash`, `Edit`…), a process id and one short caption of what the agent is doing: a file name, the first word or two of a command (`git push`), a site's domain, or the first 6 characters of your prompt followed by "…". Full prompts, commands and code are never sent, and nothing leaves your PC.
 - The server listens on `127.0.0.1:7777` only and is not reachable from other machines.
 - The hook always exits successfully, so it never slows down or breaks Claude Code or Codex, even when the server is off.
-- To see which programs are open, the server reads the process list every 4 seconds (PowerShell on Windows, `ps` on macOS). When the wallpaper is paused or hidden it checks only every 30 seconds.
+- To see which programs are open, the server reads the process list every 4 seconds (PowerShell on Windows, `ps` on macOS and Linux). When the wallpaper is paused or hidden it checks only every 30 seconds.
 
 ## Remove
 
 - Windows: `powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\TGTI-AI-Office\uninstall.ps1"`
 - macOS: `curl -fsSL https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-office/main/macos/uninstall.sh | bash`
+- Linux: `curl -fsSL https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-office/main/linux/uninstall.sh | bash` (then delete the `exec-once` line from `hyprland.conf` or the sway config)
 
-Both remove the hooks, the autostart, the wallpaper and the private Node.js copy.
+All remove the hooks, the autostart and the wallpaper; on Windows and Mac they also remove the private Node.js copy (Linux has none).
 
 ## Good to know
 
@@ -123,6 +152,7 @@ Both remove the hooks, the autostart, the wallpaper and the private Node.js copy
 | `install-hooks.mjs` | adds or removes the hooks |
 | `windows/` | Windows installer, uninstaller and `watch.vbs` (starts the server while Wallpaper Engine is open) |
 | `macos/` | the Mac app (`main.swift`), its build script, installer and uninstaller |
+| `linux/` | the Linux wallpaper window (`host.c`, GTK + layer-shell + WebKitGTK), installer and uninstaller |
 | `install-hooks.cmd`, `start-office*.cmd`, `stop-office.cmd`, `autostart.cmd` | manual setup from a plain folder (for development) |
 | `test-agent.mjs` | fake agent for testing |
 | `fonts/` | [Tiny5](https://github.com/Gissio/font_tiny5) pixel font (SIL Open Font License) |
