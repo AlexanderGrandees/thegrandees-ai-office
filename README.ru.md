@@ -1,4 +1,4 @@
-# TheGrandees AI Office: живые обои для Windows и Mac
+# TheGrandees AI Office: живые обои для Windows, Mac и Linux
 
 [English](README.md) · Русский
 
@@ -92,22 +92,52 @@ curl -fsSL https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-of
 
 Проверка без Claude: при открытом офисе выполни в папке установки `node test-agent.mjs VASYA`.
 
+### Linux (Wayland: Hyprland, Sway)
+
+Сначала поставь зависимости для сборки (GTK 3, gtk-layer-shell, WebKitGTK 4.1, компилятор C, Node.js 18 или новее):
+
+```bash
+# Arch
+sudo pacman -S --needed base-devel gtk3 gtk-layer-shell webkit2gtk-4.1 nodejs
+# Fedora
+sudo dnf install gcc pkgconf gtk3-devel gtk-layer-shell-devel webkit2gtk4.1-devel nodejs
+# Ubuntu 24.04+
+sudo apt install build-essential pkg-config libgtk-3-dev libgtk-layer-shell-dev libwebkit2gtk-4.1-dev nodejs
+```
+
+Потом открой терминал внутри Wayland-сессии и вставь:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-office/main/linux/install.sh | bash
+```
+
+Sudo не нужен. Установщик:
+- кладёт офис в `~/.local/share/tgti-ai-office` и собирает там маленькое окно обоев;
+- прописывает хуки для Claude Code и Codex;
+- добавляет пользовательскую службу systemd `tgti-ai-office.service`, которая запускает офис вместе с графической сессией. Сервер офиса работает, только пока работает это окно.
+
+Hyprland: добавь в `hyprland.conf` строку `exec-once = systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP && systemctl --user restart tgti-ai-office.service` (в Sway та же строка с `exec`). Программы для обоев (hyprpaper, swww, swaybg) рисуют на том же слое и могут закрыть офис, их нужно выключить. На NVIDIA, если окно пустое, выполни `systemctl --user edit tgti-ai-office` и добавь две строки: `[Service]` и `Environment=WEBKIT_DISABLE_DMABUF_RENDERER=1`, затем выполни `systemctl --user restart tgti-ai-office` (edit сам службу не перезапускает).
+
+Ограничения: работают только Wayland-композиторы с wlr-layer-shell. GNOME и X11 не поддерживаются. KDE Plasma 6 не проверялся. Автообновления нет: чтобы обновить, запусти команду установки ещё раз.
+
 ## Что уходит в хук
 
 Id сессии, имя папки, название события и инструмента (`Bash`, `Edit`…), номер процесса и одна короткая подпись того, что агент делает: имя файла, первые одно-два слова команды (`git push`), домен сайта или первые 6 символов запроса с «…». Полный текст запросов, команд и код не отправляются, и всё остаётся на этом ПК. Сервер слушает только `127.0.0.1:7777`, снаружи его не видно. Хук всегда завершается без ошибки, поэтому Claude и Codex он не мешает, даже когда сервер выключен.
 
-Чтобы видеть открытые программы, сервер раз в 4 секунды читает список процессов (на Windows через PowerShell, на Mac через `ps`). Когда обои на паузе или спрятаны, только раз в 30 секунд.
+Чтобы видеть открытые программы, сервер раз в 4 секунды читает список процессов (на Windows через PowerShell, на Mac и Linux через `ps`). Когда обои на паузе или спрятаны, только раз в 30 секунд.
 
 ## Удалить
 
 - Windows: `powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\TGTI-AI-Office\uninstall.ps1"`
 - Mac: `curl -fsSL https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-office/main/macos/uninstall.sh | bash`
+- Linux: `curl -fsSL https://raw.githubusercontent.com/AlexanderGrandees/thegrandees-ai-office/main/linux/uninstall.sh | bash` (потом удали строку `exec-once` из `hyprland.conf` или конфига sway)
 
-Убираются хуки, автозапуск, обои и своя копия Node.js.
+Убираются хуки, автозапуск и обои; на Windows и Mac ещё и своя копия Node.js (на Linux её нет).
 
 ## Важно
 
 - Повторный запуск команды установки обновляет офис до последней версии.
+- На Linux офис работает только в Wayland с wlr-layer-shell (Hyprland, Sway). На GNOME и X11 его не будет.
 - ChatGPT и Claude в браузере офис не видит: только программы, установленные на ПК. Облачные сессии (claude.ai, телефон) тоже не появятся.
 - Скрыть панель справа вверху: открой `index.html#nohud` (кнопки сезона и погоды останутся).
 - Проверка без агентов: `index.html#demo` покажет четырёх ненастоящих агентов (только для проверки). Можно добавить вид: `index.html#demo-summer-night-storm`, `-fog`, `-snow`; `-leave` через 15 секунд отправит одного агента на такси, `-bus` сразу покажет бусификацию, `-limo` посадит GPT в лимузин.
