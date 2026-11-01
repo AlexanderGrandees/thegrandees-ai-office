@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v2.1';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
+const APP_VERSION = 'v2.2';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -1003,7 +1003,7 @@ const LINES = {
   tv: ['Графік росте', 'Дивлюсь ринок'], game: ['Ще рівень!', 'Рекорд!', 'Майже пройшов'], music: ['Гарна пісня', 'Відпочиваю'],
   phone: ['Гортаю новини'], sleep: ['Хррр…'], desk: ['Чекаю задачу', 'Що далі?'],
   catDesk: ['Мурчику, привіт!', 'Котик!', 'Не лягай на клаву', 'Хто тут прийшов?'], catSofa: ['Гарний котик', 'Мурчить…'],
-  lemDesk: ['Дожартувався про лемура… купили', 'Хто жартував про лемура? Ось, маєш', 'Зефіре, не чіпай мишку!', 'О, лемур прийшов', 'Тільки не гризи кабель', 'Хочеш покодити?', 'Які оченята!'], lemSteal: ['Ей! Це моє печиво!', 'Зефіре, віддай!', 'Знову поцупив…', 'Тримай злодія!'], catBeg: ['Це не тобі', 'Кава не для котів', 'Ну добре, трошки'],
+  lemDesk: ['Дожартувався про лемура… купили', 'Хто жартував про лемура? Ось, маєш', 'Зефіре, не чіпай мишку!', 'О, лемур прийшов', 'Тільки не гризи кабель', 'Хочеш покодити?', 'Які оченята!'], lemPass: ['Джуліан?.. Ти?', 'Джуліане, це ти?', 'Королю Джуліан?!', 'Стоп… Джуліан?'], lemSteal: ['Ей! Це моє печиво!', 'Зефіре, віддай!', 'Знову поцупив…', 'Тримай злодія!'], catBeg: ['Це не тобі', 'Кава не для котів', 'Ну добре, трошки'],
   flash: ['Ого, блискавка!', 'Гримить…', 'Ух!'],
   sky: {
     clear: ['Гарна погода', 'Тихо сьогодні'], rain: ['Знову дощ', 'Пахне дощем', 'Парасолька є?'], storm: ['Гроза!', 'Ну й злива'],
@@ -2111,6 +2111,7 @@ function catStep(dt, t) {
     else { cat.x += dx / d * v; cat.y += dy / d * v; }
     return;
   }
+  if (cat.mode === 'romp') return;
   const b2 = cat.buddy;
   if (!cat.until) {
     // пришёл на место
@@ -2212,10 +2213,15 @@ function lemPlan(t) {
   const here = [...agents.values()].filter(a => !a.arriving && !a.leaving && !a.away && !a.held && !a.place.out && arrived(a));
   const desk = here.filter(a => a.place === a.desk), drink = here.filter(a => a.brk && a.place === a.brk.spot);
   const r = Math.random();
-  if (lem.snack) return lemGo(pick([LEM_BAG, LEM_ARCADE]), 'eat');
-  if (drink.length && r < 0.35) return lemGo({ lane: 142, entry: [{ x: 278, y: 142 }, { x: 278, y: 130 }] }, 'steal', pick(drink), 30);
-  if (r < 0.25) return lemGo(LEM_BAG, 'sun');
-  if (r < 0.42) return lemGo(LEM_ARCADE, 'arcade');
+  if (lem.snack) return lemGo(!CHILL[3].owner ? LEM_BAG : { lane: 142, entry: [{ x: 140, y: 142 }, { x: 140, y: 134 }] }, 'eat');
+  if (drink.length && r < 0.35) {
+    // біля кавомашини стає під агентом (праворуч значок дії закрив би лемура), біля кулера ліворуч
+    const a = pick(drink), sp = spotOf(a.brk.spot), low = sp.x <= 285, x = low ? sp.x + 5 : sp.x - 8;
+    return lemGo({ lane: a.brk.spot.lane, entry: [{ x, y: a.brk.spot.lane }, { x, y: sp.y + (low ? 8 : 2) }] }, 'steal', a, 30);
+  }
+  const bagFree = !CHILL[3].owner, arcadeFree = !CHILL[4].owner;
+  if (r < 0.25 && bagFree) return lemGo(LEM_BAG, 'sun');
+  if (r < 0.42 && arcadeFree) return lemGo(LEM_ARCADE, 'arcade');
   if (desk.length && r < 0.7) {
     const a = pick(desk), d = a.desk;
     return lemGo({ lane: d.lane, entry: [{ x: d.cx - 10, y: d.lane }, { x: d.cx - 10, y: d.y0 + 22 }] }, 'visit', a);
@@ -2228,9 +2234,50 @@ function lemPlan(t) {
   const [lane, x] = pick(spots);
   return lemGo({ lane, entry: [{ x, y: lane }] }, 'wander');
 }
+// агент проходить повз лемура і впізнає в ньому Джуліана; лемур відповідає писком
+function lemPass(t) {
+  if (t < (lem.nextPass || 0)) return;
+  for (const a of agents.values()) {
+    if (!a.path.length || a.arriving || a.leaving || a.away || a.held || a.hidden || a === lem.buddy) continue;
+    if (Math.hypot(a.x - lem.x, a.y - lem.y) > 12) continue;
+    say(a, pick(LINES.lemPass), t, true);
+    lem.nextPass = t + (FAST ? rand(15, 25) : rand(60, 150));
+    setTimeout(() => lemSay(pick(['Ік?!', 'Уі?', '…']), performance.now() / 1000), 1100);
+    return;
+  }
+}
+// кіт і лемур бісяться: ганяються один за одним по нижньому коридору, тільки звуки
+const ROMP_PT = () => ({ x: rand(108, 252), y: rand(134, 147) });
+function rompStart(t) {
+  lem.mode = 'romp'; lem.buddy = cat; lem.romp = { until: t + (FAST ? 8 : rand(8, 14)), next: 0, lead: Math.random() < 0.5 ? lem : cat };
+  cat.mode = 'romp'; cat.toss = null; cat.buddy = null; cat.until = 0;
+  lem.speed = 50; cat.speed = 48;
+  catSay(pick(['Мяу!', 'Мррау!']), t);
+}
+function rompEnd(t) {
+  for (const o of [lem, cat]) {
+    const x = Math.round(o.path.length ? o.path.at(-1).x : o.x);
+    o.path = [{ x, y: 142 }]; o.pending = null; o.place = { lane: 142, entry: [{ x, y: 142 }] }; o.until = 0;
+  }
+  lem.romp = null; lem.mode = 'wander'; lem.buddy = null; lem.speed = 24;
+  if (cat.mode === 'romp') { cat.mode = 'wander'; cat.speed = 20; }
+}
+function rompStep(t) {
+  const r = lem.romp;
+  if (cat.mode !== 'romp' || t > r.until) return rompEnd(t);
+  if (t < r.next) return;
+  // ведучий тікає в нову точку, другий біжить слідом; іноді міняються ролями
+  if (Math.random() < 0.3) r.lead = r.lead === lem ? cat : lem;
+  const other = r.lead === lem ? cat : lem, p = ROMP_PT();
+  r.lead.path = [p]; r.lead.pending = null;
+  other.path = [{ x: Math.max(104, Math.min(256, p.x + (p.x > other.x ? -8 : 8))), y: p.y }]; other.pending = null;
+  r.next = t + rand(0.9, 1.6);
+  if (Math.random() < 0.35) { if (Math.random() < 0.5) catSay(pick(['Мяу!', 'Мррау!', 'Ш-ш!']), t); else lemSay(pick(['Ііік!', 'Уі-уі!', 'Ік-ік!']), t); }
+}
 function lemStep(dt, t) {
   lem.ph += dt;
   if (lem.say && lem.say.until < t) lem.say = null;
+  if (lem.mode === 'romp') rompStep(t);
   if (lem.path.length) {
     const p = lem.path[0], dx = p.x - lem.x, dy = p.y - lem.y, d = Math.hypot(dx, dy), v = lem.speed * dt;
     if (Math.abs(dx) > 0.3) lem.dir = dx > 0 ? 'right' : 'left';
@@ -2238,23 +2285,25 @@ function lemStep(dt, t) {
     else { lem.x += dx / d * v; lem.y += dy / d * v; }
     return;
   }
+  lemPass(t);
   const b2 = lem.buddy;
   if (!lem.until) {
-    lem.until = t + ({ sun: catTime(14, 30), arcade: catTime(10, 18), visit: catTime(8, 14), steal: catTime(4, 6), cat: catTime(6, 10), eat: catTime(5, 8), wander: catTime(2, 5) })[lem.mode];
+    lem.until = t + ({ sun: catTime(14, 30), arcade: catTime(10, 18), visit: catTime(8, 14), steal: catTime(4, 6), cat: catTime(6, 10), eat: catTime(5, 8), wander: catTime(2, 5), romp: 999 })[lem.mode];
     if (b2) lem.dir = b2.x > lem.x ? 'right' : 'left';
     if (lem.mode === 'arcade') lem.dir = 'left';
-    if (lem.mode === 'sun' && Math.random() < 0.5) lemSay(pick(['Ммм, тепло', 'Уііі…']), t);
-    if (lem.mode === 'arcade') lemSay(pick(['Ік-ік!', 'Рекорд!', 'Ще раз!']), t);
-    if (lem.mode === 'visit') { lemSay(pick(['Уі?', 'Ік!', 'Ку-ку!']), t); setTimeout(() => { if (agents.has(b2.id)) say(b2, pick(LINES.lemDesk), performance.now() / 1000, true); }, 1200); }
-    if (lem.mode === 'cat') { lemSay(pick(['Ку-ку, Мурчику!', 'Уі!']), t); setTimeout(() => { if (cat.mode === 'sleep' || cat.mode === 'wander') { catSay(pick(['Ш-ш-ш!', 'Мрр…', 'Мяу?']), performance.now() / 1000); } }, 1300); }
-    if (lem.mode === 'eat') { lemSay('Ням-ням!', t); sfx.munch(); }
+    if (lem.mode === 'sun' && Math.random() < 0.5) lemSay(pick(['Уііі…', 'Мрр-уі…']), t);
+    if (lem.mode === 'arcade') lemSay(pick(['Ік-ік!', 'Уі-уі!', 'Ііік!']), t);
+    if (lem.mode === 'visit') { lemSay(pick(['Уі?', 'Ік!', 'Мрр-ік?']), t); setTimeout(() => { if (agents.has(b2.id)) say(b2, pick(LINES.lemDesk), performance.now() / 1000, true); }, 1200); }
+    if (lem.mode === 'cat' && (cat.mode === 'sleep' || cat.mode === 'wander') && !cat.path.length && cat.y >= 115 && Math.random() < 0.55) { rompStart(t); return; }
+    if (lem.mode === 'cat') { lemSay(pick(['Уі!', 'Ік?']), t); setTimeout(() => { if (cat.mode === 'sleep' || cat.mode === 'wander') { catSay(pick(['Ш-ш-ш!', 'Мрр…', 'Мяу?']), performance.now() / 1000); } }, 1300); }
+    if (lem.mode === 'eat') { lem.eatAt = t; lemSay('Хрум-хрум', t); sfx.munch(); }
     if (lem.mode === 'steal') {
       lem.until = Math.max(lem.until, t + 4);
       // краде печиво з тарілки і тікає; агент кричить услід
       setTimeout(() => {
         const n = performance.now() / 1000;
         if (lem.mode !== 'steal' || lem.path.length || !agents.has(b2.id)) return;
-        lem.snack = n; lemSay('Хі-хі!', n);
+        lem.snack = n; lemSay('Ік-ік-ік!', n);
         setTimeout(() => { if (agents.has(b2.id)) say(b2, pick(LINES.lemSteal), performance.now() / 1000, true); }, 500);
         setTimeout(() => { if (lem.mode === 'steal') lemPlan(performance.now() / 1000); lem.speed = 46; }, 900);
       }, 1500);
@@ -2263,7 +2312,8 @@ function lemStep(dt, t) {
   if (lem.mode === 'eat' && t > lem.until) lem.snack = 0;
   const gone = b2 && b2 !== cat && (b2.leaving || b2.held || b2.away || !agents.has(b2.id) || !arrived(b2) || (lem.mode === 'steal' && !b2.brk && !lem.snack));
   const catLeft = lem.mode === 'cat' && cat.path.length;
-  if (t > lem.until || gone || catLeft) lemPlan(t);
+  const bumped = (lem.mode === 'sun' && CHILL[3].owner) || (lem.mode === 'arcade' && CHILL[4].owner);
+  if (lem.mode !== 'romp' && (t > lem.until || gone || catLeft || bumped)) lemPlan(t);
 }
 const LEM = { fur: '#a3a1ab', dark: '#6f6d78', light: '#eceaf0', ol: '#3b3944', mask: '#24222b', eye: '#ffb02e' };
 function drawLemur(t) {
@@ -2293,7 +2343,7 @@ function drawLemur(t) {
     Q(X - 9, Y - 9 + b, 5, 2, LEM.fur); Q(X + 5, Y - 9 + b, 5, 2, LEM.fur); Q(X - 9, Y - 9 + b, 1, 2, LEM.mask); Q(X + 9, Y - 9 + b, 1, 2, LEM.mask);
   } else if (play) {
     c(4, -7, 3, 2, LEM.fur); c(6, -7, 1, 2, LEM.mask);
-    if (lem.mode === 'eat' && lem.snack) { const k = Math.max(1, 3 - Math.floor((t - lem.until + 6) / 2)); c(6, -9, k, 3, '#8a5f3f'); c(6, -9, k, 1, '#d9a066'); }
+    if (lem.mode === 'eat' && lem.snack) { const k = Math.max(1, 3 - Math.floor((t - (lem.eatAt || t)) / 2)); c(6, -9, k, 3, '#8a5f3f'); c(6, -9, k, 1, '#d9a066'); }
   } else { c(-1, -4, 2, 3, LEM.fur); c(2, -4, 2, 3, LEM.fur); }
   // голова: світла мордочка, чорна маска навколо помаранчевих очей, вуха з боків
   c(-3, -16, 8, 7, LEM.ol); c(-2, -16, 7, 6, LEM.light); c(-2, -16, 7, 2, LEM.fur);
