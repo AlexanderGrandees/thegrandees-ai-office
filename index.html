@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v2.0';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
+const APP_VERSION = 'v2.1';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -991,8 +991,8 @@ const LINES = {
   bye: ['Бувай!', 'До зустрічі!', 'Па-па!'],
   byeRide: { taxi: ['Викликаю таксі'], tesla: ['Тесла вже чекає', 'Їду на Теслі'], limo: ['Подайте лімузин', 'Мій лімузин!'] },
   back: ['Відслужив!', 'Я повернувся!', 'Ледве відпустили', 'Де моя кава?'],
-  bench: ['Свіже повітря', 'Гарно тут', 'Посиджу трохи'],
-  cafe: ['Смачна кава!', 'Пригощайся шоколадкою', 'Як твій код?', 'Ще по каві?', 'М-м-м, шоколад', 'Тут найкраща кава', 'Розкажи новини', 'Чорний чи молочний?', 'Шоколад дає сили'],
+  bench: ['Дожартувався про лемура… купили', 'Свіже повітря', 'Гарно тут', 'Посиджу трохи'],
+  cafe: ['Дожартувався про лемура… купили', 'Смачна кава!', 'Пригощайся шоколадкою', 'Як твій код?', 'Ще по каві?', 'М-м-м, шоколад', 'Тут найкраща кава', 'Розкажи новини', 'Чорний чи молочний?', 'Шоколад дає сили'],
   cafeHi: ['Привіт, сідай!', 'Кава й шоколад!', 'Пригощаю!'],
   catTreat: ['Тримай смаколик!', 'Тримай смаколик', 'На, смаколик!'],
   work: ['Пишу код…', 'Ще трохи', 'Майже готово', 'Хм, цікаво', 'Тести зелені!', 'Рефакторю'],
@@ -1002,7 +1002,8 @@ const LINES = {
   coffee: ['Кава!', 'Перерва на каву', 'Ще одну каву'], tea: ['Час на чай', 'Чай з лимоном', 'Гарячий чай'],
   tv: ['Графік росте', 'Дивлюсь ринок'], game: ['Ще рівень!', 'Рекорд!', 'Майже пройшов'], music: ['Гарна пісня', 'Відпочиваю'],
   phone: ['Гортаю новини'], sleep: ['Хррр…'], desk: ['Чекаю задачу', 'Що далі?'],
-  catDesk: ['Мурчику, привіт!', 'Котик!', 'Не лягай на клаву', 'Хто тут прийшов?'], catSofa: ['Гарний котик', 'Мурчить…'], catBeg: ['Це не тобі', 'Кава не для котів', 'Ну добре, трошки'],
+  catDesk: ['Мурчику, привіт!', 'Котик!', 'Не лягай на клаву', 'Хто тут прийшов?'], catSofa: ['Гарний котик', 'Мурчить…'],
+  lemDesk: ['Дожартувався про лемура… купили', 'Хто жартував про лемура? Ось, маєш', 'Зефіре, не чіпай мишку!', 'О, лемур прийшов', 'Тільки не гризи кабель', 'Хочеш покодити?', 'Які оченята!'], lemSteal: ['Ей! Це моє печиво!', 'Зефіре, віддай!', 'Знову поцупив…', 'Тримай злодія!'], catBeg: ['Це не тобі', 'Кава не для котів', 'Ну добре, трошки'],
   flash: ['Ого, блискавка!', 'Гримить…', 'Ух!'],
   sky: {
     clear: ['Гарна погода', 'Тихо сьогодні'], rain: ['Знову дощ', 'Пахне дощем', 'Парасолька є?'], storm: ['Гроза!', 'Ну й злива'],
@@ -2196,6 +2197,113 @@ function drawHearts() {
   }
 }
 
+// ---------- лемур Зефір: кільцехвостий, гріється, грає в автомат, краде печиво ----------
+// Живе за тими ж правилами, що й кіт: ходить коридорами, підходить до агентів, агенти відповідають.
+const LEM_BAG = { lane: 82, entry: [{ x: 90, y: 82 }, { x: 90, y: 77 }] };          // пуф у кутку: тут лемур «засмагає», розкинувши лапи
+const LEM_ARCADE = { lane: 142, entry: [{ x: 98, y: 142 }, { x: 98, y: 136 }] };  // біля ігрового автомата
+const lem = { x: 90, y: 77, path: [], pending: null, place: LEM_BAG, dir: 'left', ph: 0, mode: 'sun', until: 0, buddy: null, say: null, speed: 24, snack: 0, pet: true };
+function lemGo(place, mode, buddy = null, speed = 24) {
+  lem.mode = mode; lem.buddy = buddy; lem.speed = speed; lem.until = 0; lem.say = null;
+  if (place === lem.place && !lem.path.length) return;
+  routeTo(lem, place);
+}
+function lemSay(text, t) { lem.say = { text, until: t + 3 }; sfx.squeak(); }
+function lemPlan(t) {
+  const here = [...agents.values()].filter(a => !a.arriving && !a.leaving && !a.away && !a.held && !a.place.out && arrived(a));
+  const desk = here.filter(a => a.place === a.desk), drink = here.filter(a => a.brk && a.place === a.brk.spot);
+  const r = Math.random();
+  if (lem.snack) return lemGo(pick([LEM_BAG, LEM_ARCADE]), 'eat');
+  if (drink.length && r < 0.35) return lemGo({ lane: 142, entry: [{ x: 278, y: 142 }, { x: 278, y: 130 }] }, 'steal', pick(drink), 30);
+  if (r < 0.25) return lemGo(LEM_BAG, 'sun');
+  if (r < 0.42) return lemGo(LEM_ARCADE, 'arcade');
+  if (desk.length && r < 0.7) {
+    const a = pick(desk), d = a.desk;
+    return lemGo({ lane: d.lane, entry: [{ x: d.cx - 10, y: d.lane }, { x: d.cx - 10, y: d.y0 + 22 }] }, 'visit', a);
+  }
+  if (!cat.path.length && (cat.mode === 'sleep' || cat.mode === 'wander') && r < 0.85) {
+    const x = cat.x + (cat.x > 120 ? -9 : 9);
+    return lemGo({ lane: cat.place.lane, entry: [{ x, y: cat.place.lane }, { x, y: cat.y }] }, 'cat', cat);
+  }
+  const spots = [[142, rand(110, 140)], [118, rand(160, 262)], [78, rand(160, 262)], [142, rand(170, 250)]];
+  const [lane, x] = pick(spots);
+  return lemGo({ lane, entry: [{ x, y: lane }] }, 'wander');
+}
+function lemStep(dt, t) {
+  lem.ph += dt;
+  if (lem.say && lem.say.until < t) lem.say = null;
+  if (lem.path.length) {
+    const p = lem.path[0], dx = p.x - lem.x, dy = p.y - lem.y, d = Math.hypot(dx, dy), v = lem.speed * dt;
+    if (Math.abs(dx) > 0.3) lem.dir = dx > 0 ? 'right' : 'left';
+    if (d <= v) { lem.x = p.x; lem.y = p.y; lem.path.shift(); if (!lem.path.length && lem.pending) routeTo(lem, lem.pending); }
+    else { lem.x += dx / d * v; lem.y += dy / d * v; }
+    return;
+  }
+  const b2 = lem.buddy;
+  if (!lem.until) {
+    lem.until = t + ({ sun: catTime(14, 30), arcade: catTime(10, 18), visit: catTime(8, 14), steal: catTime(4, 6), cat: catTime(6, 10), eat: catTime(5, 8), wander: catTime(2, 5) })[lem.mode];
+    if (b2) lem.dir = b2.x > lem.x ? 'right' : 'left';
+    if (lem.mode === 'arcade') lem.dir = 'left';
+    if (lem.mode === 'sun' && Math.random() < 0.5) lemSay(pick(['Ммм, тепло', 'Уііі…']), t);
+    if (lem.mode === 'arcade') lemSay(pick(['Ік-ік!', 'Рекорд!', 'Ще раз!']), t);
+    if (lem.mode === 'visit') { lemSay(pick(['Уі?', 'Ік!', 'Ку-ку!']), t); setTimeout(() => { if (agents.has(b2.id)) say(b2, pick(LINES.lemDesk), performance.now() / 1000, true); }, 1200); }
+    if (lem.mode === 'cat') { lemSay(pick(['Ку-ку, Мурчику!', 'Уі!']), t); setTimeout(() => { if (cat.mode === 'sleep' || cat.mode === 'wander') { catSay(pick(['Ш-ш-ш!', 'Мрр…', 'Мяу?']), performance.now() / 1000); } }, 1300); }
+    if (lem.mode === 'eat') { lemSay('Ням-ням!', t); sfx.munch(); }
+    if (lem.mode === 'steal') {
+      lem.until = Math.max(lem.until, t + 4);
+      // краде печиво з тарілки і тікає; агент кричить услід
+      setTimeout(() => {
+        const n = performance.now() / 1000;
+        if (lem.mode !== 'steal' || lem.path.length || !agents.has(b2.id)) return;
+        lem.snack = n; lemSay('Хі-хі!', n);
+        setTimeout(() => { if (agents.has(b2.id)) say(b2, pick(LINES.lemSteal), performance.now() / 1000, true); }, 500);
+        setTimeout(() => { if (lem.mode === 'steal') lemPlan(performance.now() / 1000); lem.speed = 46; }, 900);
+      }, 1500);
+    }
+  }
+  if (lem.mode === 'eat' && t > lem.until) lem.snack = 0;
+  const gone = b2 && b2 !== cat && (b2.leaving || b2.held || b2.away || !agents.has(b2.id) || !arrived(b2) || (lem.mode === 'steal' && !b2.brk && !lem.snack));
+  const catLeft = lem.mode === 'cat' && cat.path.length;
+  if (t > lem.until || gone || catLeft) lemPlan(t);
+}
+const LEM = { fur: '#a3a1ab', dark: '#6f6d78', light: '#eceaf0', ol: '#3b3944', mask: '#24222b', eye: '#ffb02e' };
+function drawLemur(t) {
+  const X = Math.round(lem.x * S), Y = Math.round(lem.y * S), walking = lem.path.length > 0;
+  const f = lem.dir === 'right' ? 1 : -1, c = (dx, dy, w, h, col) => Q(f > 0 ? X + dx : X - dx - w + 1, Y + dy, w, h, col);
+  Q(X - 6, Y - 1, 13, 2, 'rgba(0,0,0,0.22)');
+  // хвіст у чорно-білі кільця: смужки по 2 пікселі вздовж кривої
+  const tail = pts => pts.forEach(([dx, dy], i) => c(dx, dy, 2, 2, (i >> 1) % 2 ? LEM.mask : LEM.light));
+  if (walking) {
+    const st = (lem.ph * (lem.speed > 30 ? 14 : 10) | 0) % 2, w = Math.round(Math.sin(t * 5));
+    tail([[-6, -6], [-7, -8], [-8, -10], [-8, -12], [-8, -14], [-7, -16], [-6, -18 + w], [-5, -19 + w], [-4, -19 + w]]);
+    for (const [lx, ph] of [[-4, 0], [-2, 1], [2, 1], [4, 0]]) c(lx, -3 - (st === ph ? 1 : 0), 1, 3, LEM.ol);
+    c(-5, -8, 11, 6, LEM.ol); c(-4, -8, 9, 5, LEM.fur); c(-4, -8, 9, 1, LEM.light); c(-3, -4, 7, 1, LEM.light);
+    c(4, -11, 6, 6, LEM.ol); c(5, -11, 4, 5, LEM.light); c(4, -12, 1, 2, LEM.dark); c(8, -12, 1, 2, LEM.dark);
+    c(6, -9, 1, 1, LEM.eye); c(5, -9, 1, 1, LEM.mask); c(8, -7, 2, 1, LEM.mask);
+    if (lem.snack) { c(10, -7, 3, 2, '#8a5f3f'); c(10, -7, 3, 1, '#d9a066'); }
+    return;
+  }
+  const sun = lem.mode === 'sun', play = lem.mode === 'arcade' || lem.mode === 'eat';
+  // сидить: хвіст піднятий знаком питання за спиною
+  const w = Math.round(Math.sin(t * 1.6));
+  tail([[-5, -3], [-7, -4], [-8, -6], [-9, -8], [-9, -10], [-9, -12], [-8, -14 + w], [-7, -15 + w], [-6, -15 + w]]);
+  c(-4, -10, 9, 10, LEM.ol); c(-3, -10, 7, 9, LEM.fur); c(-2, -8, 5, 7, LEM.light); c(-3, -1, 7, 1, LEM.dark);
+  if (sun) {
+    // поза «засмагає»: лапи розкинуті в боки, очі заплющені
+    const b = (t % 4) < 2 ? 0 : 1;
+    Q(X - 9, Y - 9 + b, 5, 2, LEM.fur); Q(X + 5, Y - 9 + b, 5, 2, LEM.fur); Q(X - 9, Y - 9 + b, 1, 2, LEM.mask); Q(X + 9, Y - 9 + b, 1, 2, LEM.mask);
+  } else if (play) {
+    c(4, -7, 3, 2, LEM.fur); c(6, -7, 1, 2, LEM.mask);
+    if (lem.mode === 'eat' && lem.snack) { const k = Math.max(1, 3 - Math.floor((t - lem.until + 6) / 2)); c(6, -9, k, 3, '#8a5f3f'); c(6, -9, k, 1, '#d9a066'); }
+  } else { c(-1, -4, 2, 3, LEM.fur); c(2, -4, 2, 3, LEM.fur); }
+  // голова: світла мордочка, чорна маска навколо помаранчевих очей, вуха з боків
+  c(-3, -16, 8, 7, LEM.ol); c(-2, -16, 7, 6, LEM.light); c(-2, -16, 7, 2, LEM.fur);
+  c(-4, -17, 2, 2, LEM.dark); c(4, -17, 2, 2, LEM.dark);
+  const blink = sun || (t % 3.7) < 0.15;
+  c(-1, -14, 2, 2, LEM.mask); c(2, -14, 2, 2, LEM.mask);
+  if (!blink) { c(0, -14, 1, 1, LEM.eye); c(3, -14, 1, 1, LEM.eye); }
+  c(1, -11, 2, 1, LEM.mask);
+}
+
 // ---------- звук: всё синтезируется в WebAudio, без звуковых файлов ----------
 // Фон: дождь, ветер, гул города, машины. События: гром, клавиатуры, лампы, такси, кофе, реплики, сигнал «ждёт тебя».
 let soundOn = store.get('office-sound') !== 'off', volume = Math.max(0, Math.min(1, +(store.get('office-volume') ?? 35) / 100));
@@ -2269,6 +2377,7 @@ const sfx = {
   munch() { if (sndOk()) for (let i = 0; i < 4; i++) burst(0.04, 0.05, [filt('bandpass', 1400, 2)], i * 0.18); },
   door() { if (sndOk()) burst(0.09, 0.14, [filt('lowpass', 380)], 0, 0.004, true); },
   pour() { if (sndOk()) burst(1.8, 0.04, [filt('bandpass', 2600, 1.2)], 0.1, 0.25); },
+  squeak() { tone(1500, 0.09, 'square', 0.018, 0, 2100); tone(1700, 0.08, 'square', 0.014, 0.12, 2400); },
   meow() { tone(820, 0.32, 'triangle', 0.05, 0, 520); tone(1640, 0.25, 'sine', 0.012, 0.02, 1000); },
   purr() { if (!sndOk()) return; for (let i = 0; i < 8; i++) burst(0.22, 0.05, [filt('lowpass', 140)], i * 0.27, 0.08, true); },
   cricket() { for (let i = 0; i < 3; i++) tone(4300, 0.035, 'sine', 0.012, i * 0.06); },
@@ -2299,7 +2408,7 @@ document.addEventListener('visibilitychange', () => { if (!ac) return; if (docum
 // ---------- кадр ----------
 function frame(t, dt) {
   windNow(t);
-  step(dt, t); carStep(dt, t); lampStep(dt, t); windStep(dt); weatherStep(dt, t); catStep(dt, t); audioStep(dt, t);
+  step(dt, t); carStep(dt, t); lampStep(dt, t); windStep(dt); weatherStep(dt, t); catStep(dt, t); lemStep(dt, t); audioStep(dt, t);
   g.drawImage(bgc, 0, 0, W, H);
   drawBacklight(t);
   for (const s of treeSprites) g.drawImage(s.c, s.x + Math.round(Math.sin(t * 1.4 + s.seed) * gust * 2.4) / S, s.y, s.w, s.w);
@@ -2379,6 +2488,7 @@ function frame(t, dt) {
   for (const a of agents.values()) items.push({ y: a.y + 0.5, draw: () => drawBot(a, t) });
   for (const o of troops) items.push({ y: o.y + 0.5, draw: () => drawTrooper(o, t) });
   items.push({ y: cat.y + (cat.mode === 'sofa' && !cat.path.length ? -2 : 0.3), draw: () => drawCat(t) });
+  items.push({ y: lem.y + 0.4, draw: () => drawLemur(t) });
   items.sort((p, q2) => p.y - q2.y).forEach(i => i.draw());
   if (ROOM_DIM[phase]) { g.fillStyle = ROOM_DIM[phase]; g.fillRect(76, 24, 232, 136); }
   if (ROOM_WARM[phase]) { g.globalCompositeOperation = 'lighter'; g.fillStyle = `rgba(255,170,90,${ROOM_WARM[phase]})`; g.fillRect(76, 44, 232, 114); g.globalCompositeOperation = 'source-over'; }
@@ -2419,7 +2529,8 @@ function bubbles(t) {
   const fs = fontPx(ws * 0.4), u = Math.max(2, Math.round(ws * 0.5)), pad = u * 2;
   ctx.font = `${fs}px ${FONT_UI}`; ctx.textBaseline = 'middle';
   cat.labelY = cat.y - (cat.path.length || cat.mode === 'sleep' || cat.mode === 'sofa' ? 7 : 9);
-  for (const a of [...agents.values(), cat, ...troops]) {
+  lem.labelY = lem.y - (lem.path.length ? 8 : 10);
+  for (const a of [...agents.values(), cat, lem, ...troops]) {
     if (!a.say || a.say.until < t || a.arriving || a.away || a.hidden) continue;
     // довга репліка: два рядки, розрив по пробілу ближче до середини
     let ls = [a.say.text];
@@ -2432,7 +2543,7 @@ function bubbles(t) {
     const w = Math.ceil(Math.max(...ls.map(l => ctx.measureText(l).width))) + pad * 2 + u * 2, h = fs + pad * 2 + (ls.length - 1) * lineH;
     const cxp = Math.round(ox + a.x * ws), bottom = oy + ((a.labelY ?? a.y - 20) - 2) * ws;
     const x = Math.max(4 * u, Math.min(cv.width - w - 4 * u, Math.round(cxp - w / 2))), y = Math.round(bottom - h - u * 2);
-    const fade = Math.min(1, (a.say.until - t) / 0.4, (t - (a.say.at ?? a.say.until - (a === cat ? 3 : 4))) / 0.2);
+    const fade = Math.min(1, (a.say.until - t) / 0.4, (t - (a.say.at ?? a.say.until - (a === cat || a === lem ? 3 : 4))) / 0.2);
     ctx.globalAlpha = Math.max(0, fade);
     pixelBox(x, y, w, h, u, '#f7f5ff', '#1D1A33');
     ctx.fillStyle = '#1D1A33'; ctx.fillRect(cxp - u, y + h - u, u * 3, u); ctx.fillRect(cxp, y + h, u, u * 2);
