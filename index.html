@@ -20,7 +20,7 @@
 // поэтому у мебели, ботов и улицы есть мелкие детали. Буфер растягивается на экран без сглаживания.
 // Агенты = открытые AI-программы на ПК (Claude Code, Claude, Codex, ChatGPT). Данные: http://127.0.0.1:7777/state.
 // Поверх сцены: сезоны и погода, ветер за зданием, лампы на столах, перерывы на кофе, такси, реплики, панель агентов.
-const APP_VERSION = 'v2.2';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
+const APP_VERSION = 'v2.3';                 // показується в панелі справа; з 21.10.2026 нумерація v1.1, далі +0.1 на кожен випуск
 const W = 384, H = 216, S = 2, SERVER = 'http://127.0.0.1:7777';
 const HASH = location.hash;
 const SHOW_HUD = !HASH.includes('nohud');
@@ -83,23 +83,17 @@ function textQ(s, x, y, px, col, hi) {
   }
 }
 
-// ---------- время: всегда киевское, день и ночь по настоящему восходу и закату ----------
-const KFMT = (() => {
-  for (const timeZone of ['Europe/Kyiv', 'Europe/Kiev']) {
-    try { return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit', month: 'numeric', hourCycle: 'h23' }); } catch {}
-  }
-  return null;
-})();
+// ---------- время: локальное время пользователя, день и ночь по восходу и закату его часового пояса ----------
 function kyiv() {
   const d = new Date();
-  if (!KFMT) return { h: d.getHours(), m: d.getMinutes(), s: d.getSeconds(), mon: d.getMonth() + 1 };
-  const o = {}; for (const p of KFMT.formatToParts(d)) o[p.type] = +p.value;
-  return { h: o.hour % 24, m: o.minute, s: o.second, mon: o.month };
+  return { h: d.getHours(), m: d.getMinutes(), s: d.getSeconds(), mon: d.getMonth() + 1 };
 }
+// долгота по стандартному (без летнего) смещению часового пояса: 15° на час; широту не знаем, берём 50°
+const LON = (() => { const y = new Date().getFullYear(); return -Math.max(new Date(y, 0, 1).getTimezoneOffset(), new Date(y, 6, 1).getTimezoneOffset()) / 4; })();
 const utcMin = (d = new Date()) => d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60;
-// восход и закат в Киеве на сегодня (формулы NOAA), в минутах от полуночи UTC
+// восход и закат в часовом поясе пользователя на сегодня (формулы NOAA), в минутах от полуночи UTC
 function sunTimes(d = new Date()) {
-  const lat = 50.45 * Math.PI / 180, lon = 30.52;
+  const lat = 50.45 * Math.PI / 180, lon = LON;
   const N = Math.round((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - Date.UTC(d.getUTCFullYear(), 0, 0)) / 864e5);
   const gm = 2 * Math.PI / 365 * (N - 1);
   const eqt = 229.18 * (0.000075 + 0.001868 * Math.cos(gm) - 0.032077 * Math.sin(gm) - 0.014615 * Math.cos(2 * gm) - 0.040849 * Math.sin(2 * gm));
@@ -107,7 +101,7 @@ function sunTimes(d = new Date()) {
   const ha = Math.acos(Math.cos(90.833 * Math.PI / 180) / (Math.cos(lat) * Math.cos(decl)) - Math.tan(lat) * Math.tan(decl)) * 180 / Math.PI;
   return { rise: 720 - 4 * (lon + ha) - eqt, set: 720 - 4 * (lon - ha) - eqt };
 }
-// минуты UTC в киевское «ЧЧ:ММ»
+// минуты UTC в локальное «ЧЧ:ММ»
 function kyivHM(m) {
   const k = kyiv(), off = Math.round((((k.h * 60 + k.m) - Math.floor(utcMin())) % 1440 + 1440) % 1440 / 30) * 30;
   const v = Math.round(m + off + 1440) % 1440;
